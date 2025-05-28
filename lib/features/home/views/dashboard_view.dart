@@ -6,7 +6,7 @@ import 'package:teacherapp/common/styles.dart';
 import 'package:teacherapp/features/auth/providers/providers.dart';
 
 import '../../../router/routers.dart';
-import '../../Curriculum/CurriculumDashboard.dart';
+import '../../curriculum/curriculum_dashboard.dart';
 
 class DashboardView extends ConsumerWidget {
   const DashboardView({super.key});
@@ -46,9 +46,14 @@ class DashboardView extends ConsumerWidget {
     },
     {
       'icon': 'assets/cu.png',
-      'label':'Curriculum',
+      'label':'curriculum',
       'page': CurriRoute().location
     },
+    // {
+    //   'icon': 'assets/cu.png',
+    //   'label':'Smart Chat',
+    //   'page': SmartChatRoute().location
+    // },
     // {'icon': 'assets/chat.png', 'label': 'Smart Chat', 'page': const SmartChatScreen(), 'isNew': true},
     // {'icon': 'assets/curriculum.png', 'label': 'Curriculum', 'page': const CurriculumScreen()},
   ];

@@ -11,7 +11,8 @@ import 'package:teacherapp/views/home/remark/remarkDashBoard.dart';
 import 'package:teacherapp/views/home/techerNote/techerNoteDashBoard.dart';
 import 'package:teacherapp/views/home/timeTable/timeTableTecaher.dart';
 
-import '../features/Curriculum/CurriculumDashboard.dart';
+import '../features/SmartChatWebView.dart';
+import '../features/curriculum/curriculum_dashboard.dart';
 import '../features/auth/views/views.dart';
 import '../features/leave_application/models/models.dart';
 import '../features/leave_application/views/views.dart';
@@ -109,6 +110,15 @@ class CurriRoute extends GoRouteData {
   }
 }
 
+class SmartChatRoute extends GoRouteData {
+  const SmartChatRoute();
+  static const path = 'Smart Chat';
+  @override
+  Widget build(BuildContext context, GoRouterState state) {
+    return const SmartChatPage();
+  }
+}
+
 class HomeWorkRoute extends GoRouteData {
   const HomeWorkRoute();
   static const path = 'homework';
@@ -132,7 +142,7 @@ class TimeTableRoute extends GoRouteData {
   static const path = 'time_table';
   @override
   Widget build(BuildContext context, GoRouterState state) {
-    return const TimeTableView();
+    return  TimeTableView();
   }
 }
 
