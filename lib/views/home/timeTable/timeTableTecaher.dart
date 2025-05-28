@@ -1,70 +1,128 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-class TimeTableView extends StatefulWidget {
-  const TimeTableView({super.key});
+import '../../../features/auth/providers/auth_provider.dart';
+import '../../../providers/api_client_provider.dart';
 
-  @override
-  TimeTableViewState createState() => TimeTableViewState();
+
+class Period {
+  final String period;
+  final String subject;
+  final String className;
+  final String section;
+
+  Period({
+    required this.period,
+    required this.subject,
+    required this.className,
+    required this.section,
+  });
+
+  factory Period.fromJson(Map<String, dynamic> json) => Period(
+    period: json['period_no'].toString(),
+    subject: json['subject'] ?? "--",
+    className: json['class'] ?? "-",
+    section: json['section'] ?? "-",
+  );
 }
 
-class TimeTableViewState extends State<TimeTableView> {
-  final List<String> days = ["MON", "TUE", "WED", "THU", "FRI", "SAT"];
-  int selectedIndex = 0;
-  late PageController _pageController;
 
-  /// *Dummy Timetable Data*
-  final Map<String, List<Period>> timetable = {
-    "MON": [
-      Period(period: "1", subject: "English", className: "5 D"),
-      Period(period: "2", subject: "Hindi", className: "5 D"),
-      Period(period: "3", subject: "SST", className: "4 D"),
-      Period(period: "4", subject: "--", className: "--"),
-      Period(period: "5", subject: "English", className: "5 C"),
-      Period(period: "6", subject: "SST", className: "--"),
-      Period(period: "7", subject: "English", className: "--"),
-    ],
-    "TUE": [
-      Period(period: "1", subject: "Mathematics", className: "5 D"),
-      Period(period: "2", subject: "Science", className: "5 D"),
-    ],
-    "WED": [
-      Period(period: "1", subject: "English", className: "5 C"),
-      Period(period: "2", subject: "History", className: "4 D"),
-    ],
-    "THU": [
-      Period(period: "1", subject: "Physics", className: "5 B"),
-      Period(period: "2", subject: "Chemistry", className: "5 C"),
-    ],
-    "FRI": [
-      Period(period: "1", subject: "Computer", className: "5 A"),
-      Period(period: "2", subject: "Music", className: "5 D"),
-    ],
-    "SAT": [
-      Period(period: "1", subject: "Art", className: "5 C"),
-    ],
-  };
 
-  @override
-  void initState() {
-    super.initState();
-    _pageController = PageController();
-    DateTime now = DateTime.now();
-    selectedIndex = now.weekday - 1;
-    if (selectedIndex > 5) selectedIndex = 0;
-    _pageController = PageController(initialPage: selectedIndex);
+class TimeTableService {
+  final Dio apiClient;
+  final String baseUrl;
+  TimeTableService(this.apiClient, this.baseUrl);
+
+  Future<List<Period>> fetchTimetable({
+    required String teacherId,
+    required String short_name,
+    required String day,
+    required String academicYear,
+  }) async {
+    final response = await apiClient.post(
+      '${baseUrl}AdminApi/get_teacher_timetable',
+      data: {
+        'teacher_id': teacherId,
+        'short_name': short_name,
+        'day': day,
+        'acd_yr': academicYear,
+      },
+    );
+    if (response.statusCode == 200 && response.data['status'] == true) {
+      final ttData = response.data['tt_data'];
+      if (ttData is! List) return [];
+      Map<int, Period> map = {};
+      for (var item in ttData) {
+        int pNo = int.tryParse(item['period_no'].toString()) ?? 0;
+        map[pNo] = Period.fromJson(item);
+      }
+      // Fill 1-8 with actual or default
+      List<Period> periods = [];
+      for (int i = 1; i <= 8; i++) {
+        if (map.containsKey(i)) {
+          periods.add(map[i]!);
+        } else {
+          periods.add(Period(period: i.toString(), subject: "--", className: "-", section: "-"));
+        }
+      }
+      return periods;
+    }
+    return [];
   }
+}
+
+
+final timeTableServiceProvider = Provider<TimeTableService>((ref) {
+  final auth = ref.read(authProvider).requireValue;
+  final dio = ref.read(apiClientProvider).requireValue;
+  return TimeTableService(
+    dio,
+    auth.teacherVerification?.teacherapkUrl ?? '',
+  );
+});
+
+final timeTableProvider = FutureProvider.family<List<Period>, String>((ref, day) async {
+  final auth = ref.read(authProvider).requireValue;
+  final service = ref.read(timeTableServiceProvider);
+  final academicYear = auth.academicYr ?? '';
+  final teacherId = auth.regId ?? '';
+  final short_name = auth.teacherVerification?.shortName ?? '';
+  return service.fetchTimetable(
+    teacherId: teacherId,
+    short_name: short_name,
+    day: day,
+    academicYear: academicYear,
+  );
+});
+
+class TimeTableView extends HookConsumerWidget {
+  TimeTableView({super.key});
+
+  final List<String> days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  final List<String> daysShort = ["MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pageController = usePageController();
+    final selectedIndex = useState(_initialDayIndex());
+
+    void onSelectDay(int index) {
+      selectedIndex.value = index;
+      pageController.jumpToPage(index);
+    }
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        toolbarHeight: 60.h,
+        toolbarHeight: 20.h,
         title: Text(
-          "Time Table(2024-2025)",
-          style: TextStyle(fontSize: 20.sp, color: Colors.white),
+          "Time Table ",
+          style: TextStyle(fontSize: 18.sp, color: Colors.white),
         ),
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -80,34 +138,19 @@ class TimeTableViewState extends State<TimeTableView> {
         ),
         child: Column(
           children: [
-            SizedBox(height: 120.h),
-            //  _buildTitleBar(),
-            //SizedBox(height: 5),
-            _buildDaySelector(),
+            SizedBox(height: 150.h),
+            _buildDaySelector(selectedIndex.value, onSelectDay),
             Expanded(
               child: PageView.builder(
-                controller: _pageController,
-                onPageChanged: (index) {
-                  setState(() {
-                    selectedIndex = index;
-                  });
-                },
+                controller: pageController,
+                physics: const NeverScrollableScrollPhysics(),
                 itemCount: days.length,
                 itemBuilder: (context, index) {
-                  final day = days[index];
-                  final periods = timetable[day] ?? [];
-
-                  return SingleChildScrollView(
-                    child: Column(
-                      children: [
-                        _buildTableHeader(),
-                        Column(
-                          children: periods
-                              .map((period) => _buildPeriodRow(period))
-                              .toList(),
-                        ),
-                      ],
-                    ),
+                  final asyncPeriods = ref.watch(timeTableProvider(days[index]));
+                  return asyncPeriods.when(
+                    data: (periods) => _buildTable(periods),
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (err, stack) => Center(child: Text('Failed to load.\n$err')),
                   );
                 },
               ),
@@ -118,8 +161,13 @@ class TimeTableViewState extends State<TimeTableView> {
     );
   }
 
-  /// *Day Selector (Mon - Sat)*
-  Widget _buildDaySelector() {
+  /// Return 0 for Monday, 1 for Tuesday, ... Ensures 0-5 range
+  int _initialDayIndex() {
+    int idx = DateTime.now().weekday - 1;
+    return (idx < 0 || idx >= 6) ? 0 : idx;
+  }
+
+  Widget _buildDaySelector(int selectedIndex, void Function(int) onSelectDay) {
     return Card(
       margin: EdgeInsets.symmetric(vertical: 5.h, horizontal: 12.w),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
@@ -127,25 +175,20 @@ class TimeTableViewState extends State<TimeTableView> {
         padding: EdgeInsets.all(8.w),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: List.generate(days.length, (index) {
+          children: List.generate(daysShort.length, (index) {
             return GestureDetector(
-              onTap: () {
-                setState(() {
-                  selectedIndex = index;
-                });
-                _pageController.jumpToPage(index);
-              },
+              onTap: () => onSelectDay(index),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
                 padding: EdgeInsets.symmetric(vertical: 5.h, horizontal: 11.w),
                 decoration: BoxDecoration(
                   color: selectedIndex == index
                       ? const Color.fromARGB(255, 244, 107, 10)
-                      : Color(0xFFE4DADA),
+                      : const Color(0xFFE4DADA),
                   borderRadius: BorderRadius.circular(10.r),
                 ),
                 child: Text(
-                  days[index],
+                  daysShort[index],
                   style: TextStyle(
                     fontSize: 14.sp,
                     fontWeight: FontWeight.bold,
@@ -160,7 +203,22 @@ class TimeTableViewState extends State<TimeTableView> {
     );
   }
 
-  /// *Table Header*
+  Widget _buildTable(List<Period> periods) {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          _buildTableHeader(),
+          if (periods.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text('No data available.'),
+            ),
+          ...periods.map(_buildPeriodRow),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTableHeader() {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 4.h),
@@ -190,15 +248,15 @@ class TimeTableViewState extends State<TimeTableView> {
         child: Text(
           title,
           style: TextStyle(
-              fontSize: 15.sp,
-              fontWeight: FontWeight.bold,
-              color: Colors.black),
+            fontSize: 15.sp,
+            fontWeight: FontWeight.bold,
+            color: Colors.black,
+          ),
         ),
       ),
     );
   }
 
-  /// *Table Row (Period Entry)*
   Widget _buildPeriodRow(Period period) {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 2.h),
@@ -214,7 +272,7 @@ class TimeTableViewState extends State<TimeTableView> {
             children: [
               _tableCell(period.period),
               _tableCell(period.subject),
-              _tableCell(period.className),
+              _tableCell('${period.className} ${period.section}'.trim()),
             ],
           ),
         ),
@@ -228,21 +286,10 @@ class TimeTableViewState extends State<TimeTableView> {
         child: Text(
           text,
           style: TextStyle(
-              fontSize: 14.sp,
-              fontWeight: FontWeight.bold,
-              color: Colors.black),
+              fontSize: 14.sp, fontWeight: FontWeight.bold, color: Colors.black),
         ),
       ),
     );
   }
 }
 
-/// *Period Model*
-class Period {
-  final String period;
-  final String subject;
-  final String className;
-
-  Period(
-      {required this.period, required this.subject, required this.className});
-}

@@ -52,6 +52,7 @@ dependencies:
   hive_ce_flutter: ^2.1.0
 
   webview_flutter: ^4.8.0
+  json_annotation: ^4.9.0
 
   dio: any
   freezed_annotation: any
