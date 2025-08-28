@@ -406,7 +406,7 @@ class RemarkService {
         '${baseUrl}AdminApi/upload_remark_files',
         data: FormData.fromMap({
           // 'acd_yr': academicYr,
-          'student_id': studentIds,
+          'student_id': remarkId,
           'short_name': shortName,
           'datafile': base64Encode(fileBytes),
           'upload_date': uploadDate,
@@ -442,7 +442,7 @@ class RemarkService {
         '${baseUrl}AdminApi/delete_uploaded_remark_files',
         data: FormData.fromMap({
           'upload_date': uploadDate,
-          'student_id': teacherId,
+          'student_id': remarkId,
           'short_name': shortName,
           'filename': filename,
           'doc_type_folder': "remark",

@@ -102,7 +102,7 @@ class AddRemark extends HookConsumerWidget {
         upload_date: _dateController.text ?? "",
         student_id: json.encode(selectedStudents.value.map((e) => e.studentId).toList()) ?? "",
         shortName: ref.read(authProvider).requireValue.teacherVerification?.shortName ?? "",
-        filename: filename,
+        filename: json.encode([filename]),
       );
       if (success) {
         uploadedFiles.value = uploadedFiles.value.where((f) => f != filename).toList();

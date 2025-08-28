@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -8,7 +10,10 @@ import 'package:teacherapp/views/home/remark/service/remark_service.dart';
 import '../../../../features/auth/providers/auth_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ViewRemark extends ConsumerStatefulWidget {
   final Remark remark;
@@ -24,54 +29,11 @@ class _ViewRemarkState extends ConsumerState<ViewRemark> {
   late List<String> selectedStudents;
   List<RemarkAttachment> attachments = [];
   bool loadingAttachments = false;
+  bool _isDownloading = false;
 
-  Future<void> onDownload(String filename) async {
-    try {
-      final response = await http.get(Uri.parse(filename));
-      if (response.statusCode == 200) {
-        // Use any downloading logic (such as download() from your library)
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('File downloaded successfully: $filename'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to download file: $filename'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error downloading file: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  Future<void> onOpenAttachment(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Invalid attachment URL')));
-      return;
-    }
-    try {
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Could not open attachment')));
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error opening attachment: $e')));
-    }
-  }
-
+  // Initialize notifications plugin
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+  FlutterLocalNotificationsPlugin();
 
   @override
   void initState() {
@@ -81,7 +43,18 @@ class _ViewRemarkState extends ConsumerState<ViewRemark> {
     selectedStudents = [
       "${widget.remark.firstName ?? ''} ${widget.remark.midName ?? ''} ${widget.remark.lastName ?? ''}"
     ];
+    _initializeNotifications();
     fetchAttachments();
+  }
+
+  Future<void> _initializeNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+    AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    const InitializationSettings initializationSettings =
+    InitializationSettings(android: initializationSettingsAndroid);
+
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
   }
 
   Future<void> fetchAttachments() async {
@@ -95,14 +68,201 @@ class _ViewRemarkState extends ConsumerState<ViewRemark> {
         shortName: auth.teacherVerification?.shortName ?? '',
       );
       setState(() {
-        attachments = res.cast<RemarkAttachment>();
+        attachments = res;
         loadingAttachments = false;
       });
     } catch (e) {
       setState(() => loadingAttachments = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load attachments: $e')),
+      _showSnackBar('Failed to load attachments: $e');
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _handleDownload(RemarkAttachment attachment) async {
+    DateTime now = DateTime.now();
+    String formattedDate = DateFormat('yyyy-MM-dd').format(now);
+
+    try {
+      if (attachment.fileSize == "0") {
+        _showSnackBar('File not uploaded properly');
+      } else {
+        String downloadUrl = '${attachment.url}/${attachment.imageName}';
+        print('Download URL: $downloadUrl');
+
+        if (Platform.isAndroid) {
+          await _downloadFileAndroid(downloadUrl, context, attachment.imageName);
+        } else if (Platform.isIOS) {
+          await _downloadFileIOS(downloadUrl, attachment.imageName);
+        } else {
+          _showSnackBar('Unsupported platform');
+        }
+      }
+    } catch (e) {
+      _showSnackBar('Failed to download file: $e');
+    }
+  }
+
+  Future<void> _downloadFileAndroid(String url, BuildContext context, String name) async {
+    setState(() {
+      _isDownloading = true;
+    });
+
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+    AndroidNotificationDetails(
+      'download_channel',
+      'Download Channel',
+      channelDescription: 'Notifications for file downloads',
+      importance: Importance.high,
+      priority: Priority.high,
+      showProgress: true,
+      onlyAlertOnce: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+    NotificationDetails(android: androidPlatformChannelSpecifics);
+
+    // Request storage permission
+    var status = await Permission.storage.status;
+    // if (!status.isGranted) {
+    //   status = await Permission.storage.request();
+    //   if (!status.isGranted) {
+    //     _showSnackBar('Storage permission denied');
+    //     setState(() => _isDownloading = false);
+    //     return;
+    //   }
+    // }
+
+    var directory = Directory("/storage/emulated/0/Download/TeacherApp/Remarks");
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+
+    var path = "${directory.path}/$name";
+    var file = File(path);
+
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      'Downloading Attachment',
+      'Downloading $name...',
+      platformChannelSpecifics,
+    );
+
+    try {
+      var res = await http.get(Uri.parse(url));
+      if (res.statusCode == 200) {
+        await file.writeAsBytes(res.bodyBytes);
+
+        await flutterLocalNotificationsPlugin.show(
+          0,
+          'Download Complete',
+          'File saved to Download/TeacherApp/Remarks/$name',
+          platformChannelSpecifics,
+          payload: path,
+        );
+
+        _showSnackBar('File downloaded successfully: Download/TeacherApp/Remarks');
+      } else {
+        await flutterLocalNotificationsPlugin.show(
+          0,
+          'Download Failed',
+          'Failed to download file: ${res.statusCode}',
+          platformChannelSpecifics,
+        );
+        _showSnackBar('Failed to download file: ${res.statusCode}');
+      }
+    } catch (e) {
+      await flutterLocalNotificationsPlugin.show(
+        0,
+        'Download Failed',
+        'Failed to download file',
+        platformChannelSpecifics,
       );
+      _showSnackBar('Failed to download file: $e');
+    } finally {
+      setState(() {
+        _isDownloading = false;
+      });
+    }
+  }
+
+  Future<void> _downloadFileIOS(String url, String fileName) async {
+    setState(() {
+      _isDownloading = true;
+    });
+
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+    AndroidNotificationDetails(
+      'download_channel',
+      'Download Channel',
+      channelDescription: 'Notifications for file downloads',
+      importance: Importance.high,
+      priority: Priority.high,
+      showProgress: true,
+      onlyAlertOnce: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+    NotificationDetails(android: androidPlatformChannelSpecifics);
+
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final filePath = '${directory.path}/$fileName';
+      final file = File(filePath);
+
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        await file.writeAsBytes(response.bodyBytes);
+
+        await flutterLocalNotificationsPlugin.show(
+          0,
+          'Download Complete',
+          'File saved to $filePath',
+          platformChannelSpecifics,
+          payload: filePath,
+        );
+
+        _showSnackBar('Find it in the Files/On My iPhone/Teacher App/Remarks.');
+      } else {
+        await flutterLocalNotificationsPlugin.show(
+          0,
+          'Download Failed',
+          'Failed to download file: ${response.statusCode}',
+          platformChannelSpecifics,
+        );
+        _showSnackBar('Failed to download file: ${response.statusCode}');
+      }
+    } catch (e) {
+      await flutterLocalNotificationsPlugin.show(
+        0,
+        'Download Failed',
+        'Failed to download file',
+        platformChannelSpecifics,
+      );
+      _showSnackBar('Failed to download file: $e');
+    } finally {
+      setState(() {
+        _isDownloading = false;
+      });
+    }
+  }
+
+  Future<void> onOpenAttachment(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) {
+      _showSnackBar('Invalid attachment URL');
+      return;
+    }
+    try {
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        _showSnackBar('Could not open attachment');
+      }
+    } catch (e) {
+      _showSnackBar('Error opening attachment: $e');
     }
   }
 
@@ -169,42 +329,48 @@ class _ViewRemarkState extends ConsumerState<ViewRemark> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text("Attach Document", style: TextStyle(fontWeight: FontWeight.bold)),
+                      if (_isDownloading)
+                        const CircularProgressIndicator()
                     ],
                   ),
 
-                  if (attachments.isNotEmpty)
+                  if (loadingAttachments)
+                    const Center(child: CircularProgressIndicator())
+                  else if (attachments.isNotEmpty)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: attachments.map((att) {
                         final url = "${att.url}/${att.imageName}";
                         return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2), // minimal vertical gap
+                          padding: const EdgeInsets.symmetric(vertical: 8),
                           child: Row(
                             children: [
-                              if(att.imageName.contains('.jpg'))
-                                Icon(Icons.remove_red_eye, color: Colors.redAccent
+                              if(att.imageName.contains('.jpg') || att.imageName.contains('.png'))
+                                const Icon(Icons.image, color: Colors.redAccent, size: 24)
+                              else
+                                const Icon(Icons.insert_drive_file, color: Colors.blue, size: 24),
 
-                                ) else  Icon(Icons.insert_drive_file, color: Colors.blue),
+                              const SizedBox(width: 12),
 
-                              const SizedBox(width: 5),
-
-                              if(att.imageName.contains('.jpg'))
-                                Expanded(
-                                  child: TextButton( onPressed: () {
-                                    onOpenAttachment(url);
-                                  },
-                                      child: Text(att.imageName, style: const TextStyle(fontSize: 13))),
-                                ) else Expanded(
-                                child: TextButton( onPressed: () {
-                                  // onOpenAttachment(url);
-                                },
-                                    child: Text(att.imageName, style: const TextStyle(color:Colors.black,fontSize: 13))),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(att.imageName, style: TextStyle(fontSize: 14.sp)),
+                                    Text("Size: ${att.fileSize}", style: TextStyle(fontSize: 12.sp, color: Colors.grey)),
+                                  ],
+                                ),
                               ),
+
+                              if(att.imageName.contains('.jpg') || att.imageName.contains('.png'))
+                                IconButton(
+                                  icon: const Icon(Icons.remove_red_eye, color: Colors.green),
+                                  onPressed: () => onOpenAttachment(url),
+                                ),
+
                               IconButton(
                                 icon: const Icon(Icons.download, color: Colors.blue),
-                                onPressed: () {
-                                  onDownload(url);
-                                },
+                                onPressed: _isDownloading ? null : () => _handleDownload(att),
                               ),
                             ],
                           ),
@@ -217,8 +383,6 @@ class _ViewRemarkState extends ConsumerState<ViewRemark> {
                       child: Text("No attachments", style: TextStyle(color: Colors.grey, fontSize: 14)),
                     ),
 
-
-
                   SizedBox(height: 20.h),
                   Align(
                     alignment: Alignment.center,
@@ -229,7 +393,7 @@ class _ViewRemarkState extends ConsumerState<ViewRemark> {
                         padding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 24.w),
                       ),
                       onPressed: () => Navigator.pop(context),
-                      icon: Icon(Icons.arrow_back, color: Colors.black),
+                      icon: const Icon(Icons.arrow_back, color: Colors.black),
                       label: const Text("Back", style: TextStyle(color: Colors.black, fontSize: 14)),
                     ),
                   ),
