@@ -21,7 +21,7 @@ class CurriculumPage extends HookConsumerWidget {
       appBar: AppBar(
         toolbarHeight: 40.h,
         title: const Text(
-          "Curriculum (2024-2025)",
+          "Curriculum",
           style: TextStyle(color: Colors.white),
         ),
         backgroundColor: const Color.fromARGB(255, 208, 28, 127),
@@ -41,42 +41,33 @@ class CurriculumPage extends HookConsumerWidget {
           ),
         ),
         child: roleInfoAsync.when(
-          loading: () => const Center(
-              child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Error: $e', style: TextStyle(color: Colors.white))),
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(
+              child: Text('Error: $e', style: const TextStyle(color: Colors.white))),
           data: (roleInfo) {
-            // if (roleInfo == null) {
-            //   return Center(
-            //     child: Text(
-            //       'No curriculum role information found.',
-            //       style: TextStyle(color: Colors.white, fontSize: 16.sp),
-            //     ),
-            //   );
-            // }
-
-            // final showChapters = roleInfo.role == 'curri coordinator' || roleInfo.role == 'dept coordinator';
-            // final showLessonPlanHeading = roleInfo.role == 'curri coordinator';
-
-            final curriculumItems = [
+            // Basic curriculum items
+            final curriculumItems = <CurriculumItem>[
               CurriculumItem(title: "Chapters", icon: Icons.menu_book),
-              CurriculumItem(title: "Lesson Plan Heading", icon: Icons.format_list_numbered),
               CurriculumItem(title: "Lesson Plan Template", icon: Icons.description),
               CurriculumItem(title: "Lesson Plan", icon: Icons.assignment),
             ];
+
+            // Add Lesson Plan Heading only for curri coordinator
+            if (roleInfo != null && roleInfo.role == "curri coordinator") {
+              curriculumItems.insert(
+                1,
+                CurriculumItem(
+                  title: "Lesson Plan Heading",
+                  icon: Icons.format_list_numbered,
+                ),
+              );
+            }
 
             return ListView.builder(
               padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 140.h),
               itemCount: curriculumItems.length,
               itemBuilder: (context, index) {
                 final item = curriculumItems[index];
-
-                // Hide items based on role
-                // if ((index == 0 && !showChapters) ||
-                //     (index == 1 && !showLessonPlanHeading) ||
-                //     (index == 2 && !showLessonPlanHeading)) {
-                //   return const SizedBox.shrink();
-                // }
-
                 return Card(
                   margin: EdgeInsets.symmetric(vertical: 8.h),
                   shape: RoundedRectangleBorder(
@@ -84,7 +75,8 @@ class CurriculumPage extends HookConsumerWidget {
                   ),
                   elevation: 3,
                   child: ListTile(
-                    leading: Icon(item.icon, size: 28.sp, color: Colors.blueAccent),
+                    leading:
+                    Icon(item.icon, size: 28.sp, color: Colors.blueAccent),
                     title: Text(
                       item.title,
                       style: TextStyle(
@@ -94,18 +86,28 @@ class CurriculumPage extends HookConsumerWidget {
                     ),
                     trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                     onTap: () {
-                      switch (index) {
-                        case 0:
-                          Navigator.push(context, MaterialPageRoute(builder: (context) => ChaptersPage()));
+                      switch (item.title) {
+                        case "Chapters":
+                          Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => ChaptersPage()));
                           break;
-                        case 1:
-                          Navigator.push(context, MaterialPageRoute(builder: (context) => LessonPlanHeadingPage()));
+                        case "Lesson Plan Heading":
+                          Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => LessonPlanHeadingPage()));
                           break;
-                        case 2:
-                          Navigator.push(context, MaterialPageRoute(builder: (context) => const LessonPlanTemplatePage()));
+                        case "Lesson Plan Template":
+                          Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const LessonPlanTemplatePage()));
                           break;
-                        case 3:
-                          Navigator.push(context, MaterialPageRoute(builder: (context) => const LessonPlanPage()));
+                        case "Lesson Plan":
+                          Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const LessonPlanPage()));
                           break;
                       }
                     },
@@ -123,6 +125,5 @@ class CurriculumPage extends HookConsumerWidget {
 class CurriculumItem {
   final String title;
   final IconData icon;
-
   CurriculumItem({required this.title, required this.icon});
 }

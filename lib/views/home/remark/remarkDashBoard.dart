@@ -87,8 +87,9 @@ class RemarkDashBoardView extends HookConsumerWidget {
 
 class RemarkNoteCard extends HookConsumerWidget {
   final Remark remark;
+  final Function(String)? onDelete;
 
-  const RemarkNoteCard({super.key, required this.remark});
+  const RemarkNoteCard({super.key, required this.remark, this.onDelete});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -192,7 +193,7 @@ class RemarkNoteCard extends HookConsumerWidget {
                     borderRadius: BorderRadius.circular(8.r),
                   ),
                   child: Text(
-                    remark.isPublished ? "Published" : "Draft",
+                    remark.acknowledge == 'Y' ? 'Acknowledge' : remark.isPublished ? "Published" : "Draft",
                     style: TextStyle(fontSize: 12.sp, color: Colors.white),
                   ),
                 ),
@@ -224,12 +225,15 @@ class RemarkNoteCard extends HookConsumerWidget {
                     IconButton(
                       icon: const Icon(Icons.edit, color: Colors.blue),
                       tooltip: "Edit",
-                      onPressed: () {
-                        Navigator.of(context).push(
+                      onPressed: () async {
+                        final changed = await Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => EditRemark(remark: remark),
                           ),
                         );
+                        if (changed == true) {
+                          ref.invalidate(remarkListProvider);
+                        }
                         showActions.value = false;
                       },
                     ),
@@ -261,7 +265,7 @@ class RemarkNoteCard extends HookConsumerWidget {
                         final remarkService = ref.read(remarkServiceProvider);
                         final auth = ref.read(authProvider).requireValue;
 
-                        final deleted = await remarkService.deleteRemark(
+                        final res = await remarkService.deleteRemark(
                           remarkId: remark.remarkId,
                           academicYr: auth.academicYr ?? '',
                           teacherId: auth.regId ?? '',
@@ -275,18 +279,19 @@ class RemarkNoteCard extends HookConsumerWidget {
                           shortName: auth.teacherVerification?.shortName ?? '',
                         );
 
-                        if (deleted) {
+                        if (res['status'] == true) {
+                          if (onDelete != null) onDelete!(remark.remarkId);
+                          ref.invalidate(remarkListProvider);
+
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('Remark deleted successfully')),
+                            SnackBar(content: Text(res['success_msg'] ?? 'Remark deleted successfully')),
                           );
-                          ref.invalidate(remarkListProvider); // Refresh the remarks list
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('Failed to delete remark')),
+                            SnackBar(content: Text(res['error_msg'] ?? 'Failed to delete remark')),
                           );
                         }
+
                       },
                     ),
                   ],
@@ -324,6 +329,20 @@ class RemarkNoteCard extends HookConsumerWidget {
                         showActions.value = false;
                       },
                     ),
+                  if(remark.acknowledge == 'Y')
+                  IconButton(
+                      icon: const Icon(Icons.thumb_up_sharp,
+                          color: Colors.black),
+                      tooltip: "Acknowledge",
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ViewRemark(remark: remark),
+                          ),
+                        );
+                        showActions.value = false;
+                      },
+                    ),
                 ]
               ],
             )
@@ -332,32 +351,6 @@ class RemarkNoteCard extends HookConsumerWidget {
       ),
     );
   }
-
-  // void _deleteRemark(BuildContext context, Remark remark) {
-  //   showDialog(
-  //     context: context,
-  //     builder: (context) => AlertDialog(
-  //       title: const Text("Delete Remark"),
-  //       content: const Text("Are you sure you want to delete this remark?"),
-  //       actions: [
-  //         TextButton(
-  //           onPressed: () => Navigator.pop(context),
-  //           child: const Text("Cancel"),
-  //         ),
-  //         TextButton(
-  //           onPressed: () {
-  //             // TODO: call delete service here
-  //             ScaffoldMessenger.of(context).showSnackBar(
-  //               const SnackBar(content: Text('Remark deleted successfully')),
-  //             );
-  //             Navigator.pop(context);
-  //           },
-  //           child: const Text("Delete", style: TextStyle(color: Colors.red)),
-  //         ),
-  //       ],
-  //     ),
-  //   );
-  // }
 
   void _publishRemark(
       BuildContext context, WidgetRef ref, Remark remark) async {

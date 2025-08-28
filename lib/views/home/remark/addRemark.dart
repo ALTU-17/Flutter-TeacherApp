@@ -1,14 +1,14 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:teacherapp/views/home/remark/provider/remark_provider.dart';
 import 'package:tuple/tuple.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import 'model/ClassSubStudentModel.dart';
-import 'package:form_builder_file_picker/form_builder_file_picker.dart';
+import 'model/create_remark_body.dart';
 
 class AddRemark extends HookConsumerWidget {
   const AddRemark({super.key});
@@ -16,48 +16,29 @@ class AddRemark extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final _formKey = GlobalKey<FormState>();
-
     final showAttachment = useState(true);
-
+    final deleteimagelist = useState<List<String>>([]);
     final _dateController = useTextEditingController(
         text: "${DateTime.now().day}-${DateTime.now().month}-${DateTime.now().year}");
-
-    final pickedFiles = useState<List<PlatformFile>>([]); // Holds user-selected files
+    final pickedFiles = useState<List<PlatformFile>>([]);
     final uploading = useState<bool>(false);
-    final uploadedFiles = useState<List<String>>([]); // Store filenames of uploaded attachments
-
-    Future<void> _pickFiles() async {
-      final result = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
-      if (result != null) {
-        pickedFiles.value = result.files;
-        // You may also immediately call upload here, or prompt user to hit 'Attach'
-      }
-    }
-
-
-    // Use ValueNotifier for class/section and subject, just like in CreateChapterPage logic
+    final uploadedFiles = useState<List<String>>([]);
     final selectedClassSection = useValueNotifier<ClassSection?>(null);
     final selectedSubject = useValueNotifier<Subject?>(null);
     final selectedStudents = useValueNotifier<List<Student>>([]);
-    final remarkType = useState<String>('Remark'); // or Observation if desired
-
+    final remarkType = useState<String>('Remark');
     final selectedClassSectionValue = useValueListenable(selectedClassSection);
     final selectedSubjectValue = useValueListenable(selectedSubject);
-
-
     final _subjectOfRemarkController = useTextEditingController();
     final _remarkController = useTextEditingController();
-
     final classSectionsAsync = ref.watch(classSectionProvider);
 
-    // Subject list loaded only after class/section selected (like CreateChapterPage)
     final subjectAsync = selectedClassSection.value == null
         ? const AsyncValue<List<Subject>>.data([])
         : ref.watch(subjectProvider(
       Tuple2(selectedClassSection.value!.classId, selectedClassSection.value!.sectionId),
     ));
 
-    // Student list loaded only after both class/section and subject selected
     final studentsAsync =
     (selectedClassSectionValue == null || selectedSubjectValue == null)
         ? const AsyncValue<List<Student>>.data([])
@@ -72,38 +53,55 @@ class AddRemark extends HookConsumerWidget {
       _dateController.clear();
       _subjectOfRemarkController.clear();
       _remarkController.clear();
+      pickedFiles.value = [];
+      uploadedFiles.value = [];
+      deleteimagelist.value = [];
+    }
+
+    Future<void> _pickFiles() async {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        withData: true,
+        type: FileType.any,
+      );
+      if (result != null && result.files.isNotEmpty) {
+        pickedFiles.value = result.files;
+      }
     }
 
     Future<void> _uploadFiles() async {
       uploading.value = true;
       final remarkService = ref.read(remarkServiceProvider);
+
       for (final f in pickedFiles.value) {
         final success = await remarkService.uploadRemarkDocument(
-          // academicYr: ref.read(authProvider).requireValue.academicYr ?? "",
-          studentIds:  json.encode(selectedStudents.value.map((e) => e.studentId).toList()),
+          studentIds: json.encode(selectedStudents.value.map((e) => e.studentId).toList()),
           shortName: ref.read(authProvider).requireValue.teacherVerification?.shortName ?? "",
           filename: f.name,
           fileBytes: f.bytes!,
           uploadDate: _dateController.text,
         );
+
         if (success) {
           uploadedFiles.value = [...uploadedFiles.value, f.name];
         } else {
           _showSnack(context, "Failed to upload ${f.name}");
         }
       }
+
       pickedFiles.value = [];
       uploading.value = false;
     }
 
     Future<void> _deleteFile(String filename) async {
       final remarkService = ref.read(remarkServiceProvider);
-      final success = await remarkService.deleteRemarkDocument(
-        upload_date: _dateController.text ?? "",
-        student_id: json.encode(selectedStudents.value.map((e) => e.studentId).toList()) ?? "",
+      final success = await remarkService.NdeleteRemarkDocument(
+        upload_date: _dateController.text,
+        student_id: json.encode(selectedStudents.value.map((e) => e.studentId).toList()),
         shortName: ref.read(authProvider).requireValue.teacherVerification?.shortName ?? "",
         filename: filename,
       );
+
       if (success) {
         uploadedFiles.value = uploadedFiles.value.where((f) => f != filename).toList();
         _showSnack(context, "Deleted $filename");
@@ -126,28 +124,39 @@ class AddRemark extends HookConsumerWidget {
         _showSnack(context, "Please select at least one student");
         return;
       }
+      uploading.value = true;
 
+      final auth = ref.read(authProvider).requireValue;
+      final remarkService = ref.read(remarkServiceProvider);
 
-      final auth = ref.read(remarkServiceProvider);
-      final res = await auth.createRemark(
-        academicYr: ref.read(authProvider).requireValue.academicYr ?? "",
-        teacherId: ref.read(authProvider).requireValue.regId ?? "",
+      // Create the request body using CreateRemarkBody
+      final remarkBody = CreateRemarkBody(
+        academicYr: auth.academicYr ?? "",
+        teacherId: auth.regId ?? "",
         sectionId: selectedClassSection.value!.sectionId,
         classId: selectedClassSection.value!.classId,
         subjectId: selectedSubject.value!.smId,
-        fileName:  json.encode(uploadedFiles.value), // Implement file upload if needed
-        studentIds:  json.encode(selectedStudents.value.map((e) => e.studentId).toList()),
+        fileName: json.encode(uploadedFiles.value),
+        studentIds: json.encode(selectedStudents.value.map((e) => e.studentId).toList()),
         remarkDesc: _remarkController.text,
         remarkSubject: _subjectOfRemarkController.text,
         remarkDate: _dateController.text,
-        shortName: ref.read(authProvider).requireValue.teacherVerification?.shortName ?? "",
+        shortName: auth.teacherVerification?.shortName ?? "",
         remarkType: remarkType.value,
+        files: pickedFiles.value,
+        deleteimagelist: deleteimagelist.value,
       );
 
+      final res = await remarkService.NcreateRemark(remarkBody);
+
       if (res['status'] == true) {
-        _showSnack(context, "Remark saved!");
+        uploading.value = false;
+
+        _showSnack(context, res['success_msg'] ?? "Remark saved!");
         Navigator.pop(context, true);
       } else {
+        uploading.value = false;
+
         _showSnack(context, res['error_msg'] ?? 'Failed to save remark');
       }
     }
@@ -190,64 +199,57 @@ class AddRemark extends HookConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    /// ====== Class/Section Dropdown ======
+                    // Class/Section Dropdown
                     const Text("*Class/Section", style: TextStyle(fontWeight: FontWeight.bold)),
                     classSectionsAsync.when(
                       loading: () => const Center(child: CircularProgressIndicator()),
                       error: (err, _) => Text('Error: $err'),
-                      data: (classSections) => DropdownButtonFormField<ClassSection>(
+                      data: (classSections) => // --- Class/Section Dropdown
+                      DropdownButtonFormField<ClassSection>(
                         value: selectedClassSection.value,
                         hint: const Text("Select Class/Section"),
                         isExpanded: true,
-                        items: classSections.map((cs) =>
-                            DropdownMenuItem(
-                              value: cs,
-                              child: Text("${cs.className} ${cs.sectionName}"),
-                            )).toList(),
+                        items: classSections.map((cs) => DropdownMenuItem(
+                          value: cs,
+                          child: Text("${cs.className} ${cs.sectionName}"),
+                        )).toList(),
                         onChanged: (cls) {
                           selectedClassSection.value = cls;
                           selectedSubject.value = null;
                           selectedStudents.value = [];
                         },
-                        validator: (val) => val == null ? "Required" : null,
+                        validator: (val) => val == null ? "Please select a class/section" : null,
                         decoration: InputDecoration(
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r)),
                           contentPadding: EdgeInsets.all(10.w),
                         ),
                       ),
+
                     ),
                     SizedBox(height: 20.h),
 
-                    /// ====== Subject Dropdown (only after class/section selected) ======
+                    // Subject Dropdown
                     const Text("*Subject", style: TextStyle(fontWeight: FontWeight.bold)),
                     subjectAsync.when(
                       loading: () => const LinearProgressIndicator(),
                       error: (err, _) => Text('Error: $err'),
                       data: (subjects) {
                         if (selectedClassSection.value == null) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Text("Please select class/section first", style: TextStyle(fontSize: 14, color: Colors.grey)),
-                          );
-                        }
-                        if (subjects.isEmpty) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Text("No subjects available", style: TextStyle(fontSize: 14, color: Colors.grey)),
-                          );
+                          return const Text("Please select class/section first",
+                              style: TextStyle(fontSize: 14, color: Colors.grey));
                         }
                         return DropdownButtonFormField<Subject>(
                           value: selectedSubject.value,
                           hint: const Text("Select Subject"),
                           isExpanded: true,
                           items: subjects.map((subject) =>
-                              DropdownMenuItem(value: subject, child: Text(subject.name))
+                              DropdownMenuItem(value: subject, child: Text(subject.name ?? ""))
                           ).toList(),
                           onChanged: (val) {
                             selectedSubject.value = val;
                             selectedStudents.value = [];
                           },
-                          validator: (val) => val == null ? "Required" : null,
+                          validator: (val) => val == null ? "Please select a subject" : null,
                           decoration: InputDecoration(
                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r)),
                             contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 10),
@@ -255,74 +257,69 @@ class AddRemark extends HookConsumerWidget {
                         );
                       },
                     ),
-
                     SizedBox(height: 10.h),
 
-                    /// ====== Students Picker (only after class/section & subject selected) ======
-                    const Text("Students", style: TextStyle(fontWeight: FontWeight.bold)),
+                    // Students Picker
+                    const Text("*Student", style: TextStyle(fontWeight: FontWeight.bold)),
                     studentsAsync.when(
                       loading: () => const LinearProgressIndicator(),
                       error: (err, _) => Text('Error: $err'),
                       data: (students) {
                         if (selectedClassSection.value == null) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Text("Please select class/section first", style: TextStyle(fontSize: 14, color: Colors.grey)),
-                          );
+                          return const Text("Please select class/section first",
+                              style: TextStyle(fontSize: 14, color: Colors.grey));
                         }
                         if (selectedSubject.value == null) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Text("Please select subject first", style: TextStyle(fontSize: 14, color: Colors.grey)),
-                          );
+                          return const Text("Please select subject first",
+                              style: TextStyle(fontSize: 14, color: Colors.grey));
                         }
-                        if (students.isEmpty) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Text("No students available", style: TextStyle(fontSize: 14, color: Colors.grey)),
-                          );
-                        }
-                        return GestureDetector(
-                          onTap: () async {
-                            final result = await showModalBottomSheet<List<Student>>(
-                              context: context,
-                              builder: (_) => _StudentsPicker(
-                                students: students,
-                                selected: selectedStudents.value,
+
+                        return ValueListenableBuilder<List<Student>>(
+                          valueListenable: selectedStudents,
+                          builder: (_, selected, __) {
+                            return GestureDetector(
+                              onTap: () async {
+                                final result = await showModalBottomSheet<List<Student>>(
+                                  context: context,
+                                  builder: (_) => _StudentsPicker(
+                                    students: students,
+                                    selected: selected,
+                                  ),
+                                );
+                                if (result != null) {
+                                  selectedStudents.value = result;
+                                }
+                              },
+                              child: Container(
+                                width: double.infinity,
+                                padding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 10.w),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400),
+                                  borderRadius: BorderRadius.circular(10.r),
+                                ),
+                                child: Text(
+                                  selected.isEmpty
+                                      ? "Select students"
+                                      : selected.length == 1
+                                      ? "${selected.first.firstName} ${selected.first.lastName}"
+                                      : "${selected.length} students selected",
+                                  style: const TextStyle(fontSize: 14, color: Colors.black),
+                                ),
                               ),
                             );
-                            if (result != null) {
-                              selectedStudents.value = result;
-                            }
                           },
-                          child: Container(
-                            width: double.infinity,
-                            padding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 10.w),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade400),
-                              borderRadius: BorderRadius.circular(10.r),
-                            ),
-                            child: Text(
-                              selectedStudents.value.isEmpty
-                                  ? "Select students"
-                                  : selectedStudents.value
-                                  .map((s) => "${s.firstName} ${s.lastName}")
-                                  .join(", "),
-                              style: const TextStyle(fontSize: 14, color: Colors.black),
-                            ),
-                          ),
                         );
                       },
                     ),
 
                     SizedBox(height: 10.h),
 
-                    /// Subject of Remark
+                    // Subject of Remark
                     const Text("*Subject of Remark", style: TextStyle(fontWeight: FontWeight.bold)),
                     TextFormField(
                       controller: _subjectOfRemarkController,
                       maxLines: 3,
-                      validator: (val) => val == null || val.isEmpty ? "Required" : null,
+                      validator: (val) => val == null || val.isEmpty ? "Subject of remark is required" : null,
                       decoration: InputDecoration(
                         hintText: "Type here...",
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r)),
@@ -330,12 +327,12 @@ class AddRemark extends HookConsumerWidget {
                     ),
                     SizedBox(height: 10.h),
 
-                    /// Remark
+                    // Remark
                     const Text("*Remark", style: TextStyle(fontWeight: FontWeight.bold)),
                     TextFormField(
                       controller: _remarkController,
                       maxLines: 3,
-                      validator: (val) => val == null || val.isEmpty ? "Required" : null,
+                      validator: (val) => val == null || val.isEmpty ? "Remark is required" : null,
                       decoration: InputDecoration(
                         hintText: "Type here...",
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r)),
@@ -355,15 +352,13 @@ class AddRemark extends HookConsumerWidget {
                       ],
                     ),
 
-// Show attachment only if checkbox is NOT checked (i.e., showAttachment is true)
                     if (showAttachment.value) ...[
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           const Text("Attach Document", style: TextStyle(fontWeight: FontWeight.bold)),
                           uploading.value
-                              ? const SizedBox(
-                              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                               : IconButton(
                             icon: const Icon(Icons.attach_file, color: Colors.blue),
                             onPressed: uploading.value ? null : _pickFiles,
@@ -386,20 +381,17 @@ class AddRemark extends HookConsumerWidget {
                           padding: const EdgeInsets.only(left: 8.0, top: 2, bottom: 2),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              ...pickedFiles.value.map((f) =>
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.insert_drive_file, size: 18, color: Colors.grey),
-                                      SizedBox(width: 5),
-                                      Expanded(child: Text(f.name, style: TextStyle(fontSize: 13))),
-                                    ],
-                                  )).toList()
-                            ],
+                            children: pickedFiles.value.map((f) =>
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.insert_drive_file, size: 18, color: Colors.grey),
+                                    SizedBox(width: 5),
+                                    Expanded(child: Text(f.name, style: TextStyle(fontSize: 13))),
+                                  ],
+                                )).toList(),
                           ),
                         ),
-                      // List uploaded files with delete option
                       if (uploadedFiles.value.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 8.0, left: 8),
@@ -420,9 +412,9 @@ class AddRemark extends HookConsumerWidget {
                         ),
                     ],
 
-                    SizedBox(height: 10.h),
+                    SizedBox(height: 20.h),
 
-                    /// Save & Reset Buttons
+                    // Save & Reset Buttons
                     Row(
                       children: [
                         Expanded(
@@ -470,6 +462,7 @@ class AddRemark extends HookConsumerWidget {
 void _showSnack(BuildContext ctx, String msg) =>
     ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(msg)));
 
+// _StudentsPicker class remains the same as in your original code
 class _StudentsPicker extends StatefulWidget {
   final List<Student> students;
   final List<Student> selected;
@@ -509,18 +502,14 @@ class _StudentsPickerState extends State<_StudentsPicker> {
         children: [
           const Padding(
             padding: EdgeInsets.all(12),
-            child:
-            Text("Select Students", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            child: Text("Select Students", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           ),
-
-          // Select All Checkbox at top
           CheckboxListTile(
             value: _allSelected,
-            title: const Text('Select All Students',style: TextStyle(fontWeight: FontWeight.bold),),
+            title: const Text('Select All Students', style: TextStyle(fontWeight: FontWeight.bold)),
             controlAffinity: ListTileControlAffinity.trailing,
             onChanged: _toggleSelectAll,
           ),
-
           Expanded(
             child: ListView.builder(
               itemCount: widget.students.length,

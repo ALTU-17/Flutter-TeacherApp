@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../auth/providers/auth_provider.dart';
@@ -35,7 +36,7 @@ class EditChapterPage extends HookConsumerWidget {
         loginType: 'T',
         description: descriptionCtrl.text,
         regId: auth.regId ?? '',
-        // smId: chapter.smId ?? '',
+        smId: chapter.subjectId ?? '',
         academicYr: auth.academicYr ?? '',
         subSubject: subSubjectCtrl.text,
       );
@@ -210,11 +211,14 @@ class EditChapterPage extends HookConsumerWidget {
           validator: isRequired
               ? (value) {
             if (value == null || value.isEmpty) {
-              return 'Please enter $label';
+              return "Please enter ${label.replaceAll('*', '').trim()}"; // Remove * from label in error
             }
             return null;
           }
               : null,
+          inputFormatters: [
+            FilteringTextInputFormatter.deny(RegExp(r'[*]')), // Deny the asterisk character
+          ],
         ),
       ],
     );

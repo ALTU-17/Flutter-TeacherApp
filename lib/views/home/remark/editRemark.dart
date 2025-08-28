@@ -1,5 +1,5 @@
 import 'dart:convert';
-
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +9,10 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:teacherapp/views/home/remark/provider/remark_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../features/auth/providers/auth_provider.dart';
 import 'model/remark.dart';
@@ -23,7 +27,7 @@ class EditRemark extends HookConsumerWidget {
     // Controllers
     final _dateController = useTextEditingController(text: remark.remarkDate.split(' ').first);
     final _subjectOfRemarkController = useTextEditingController(text: remark.remarkSubject);
-    final _remarkController = useTextEditingController(text: remark.remarkType);
+    final _remarkController = useTextEditingController(text: remark.remarkDesc);
 
     final selectedSubject = useState<String>(remark.subName ?? "");
     final selectedClass = useState<String>("${remark.className} ${remark.secName}");
@@ -31,12 +35,42 @@ class EditRemark extends HookConsumerWidget {
       "${remark.firstName} ${remark.midName} ${remark.lastName}"
     ]);
 
+    // Existing attachments from server
     final attachments = useState<List<RemarkAttachment>>([]);
-    final attachmentUrl = useState<String>("");
     final loadingAttachments = useState<bool>(false);
     final uploading = useState<bool>(false);
+    final isDownloading = useState<bool>(false);
 
-    // Load attachments effect
+    // Track newly uploaded filenames in THIS editing session.
+    // IMPORTANT: we'll send only these names to updateRemark (or [""] if empty).
+    final newlyUploadedFileNames = useState<List<String>>([]);
+    final deletedExistingAttachments = useState<Set<String>>({});
+    // Initialize notifications plugin
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+    // Initialize notifications
+    useEffect(() {
+      Future.microtask(() async {
+        const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+        const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+        await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+      });
+      return null;
+    }, []);
+
+    String formatDateForApi(String date) {
+      final parts = date.split('-');
+      if (parts.length == 3 && parts[0].length == 4) {
+        return '${parts[2]}-${parts[1]}-${parts[0]}';
+      }
+      return date;
+    }
+
+    // Load attachments effect (use formatted date for API)
     useEffect(() {
       loadingAttachments.value = true;
       Future.microtask(() async {
@@ -45,22 +79,238 @@ class EditRemark extends HookConsumerWidget {
         try {
           final res = await remarkService.getRemarkImages(
             remarkId: remark.remarkId,
-            remarkDate: _dateController.text,
+            remarkDate: formatDateForApi(_dateController.text),
             shortName: auth.teacherVerification?.shortName ?? '',
           );
-          attachments.value = res.cast<RemarkAttachment>();
-          // attachmentUrl.value = attachments.value.isNotEmpty ? attachments.value. : "";
+          attachments.value = res;
         } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to load attachments: $e')),
-          );
+          _showSnackBar(context, 'Failed to load attachments: $e');
         }
         loadingAttachments.value = false;
       });
       return null;
     }, [_dateController.text]);
 
-    // Attachments upload handler
+    Future<void> _downloadFileAndroid(String url, BuildContext context, String name, FlutterLocalNotificationsPlugin notificationsPlugin) async {
+      isDownloading.value = true;
+
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+        'download_channel',
+        'Download Channel',
+        channelDescription: 'Notifications for file downloads',
+        importance: Importance.high,
+        priority: Priority.high,
+        showProgress: true,
+        onlyAlertOnce: true,
+      );
+
+      const NotificationDetails platformChannelSpecifics =
+      NotificationDetails(android: androidPlatformChannelSpecifics);
+
+      var directory = Directory("/storage/emulated/0/Download/TeacherApp/Remarks");
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+
+      var path = "${directory.path}/$name";
+      var file = File(path);
+
+      await notificationsPlugin.show(
+        0,
+        'Downloading Attachment',
+        'Downloading $name...',
+        platformChannelSpecifics,
+      );
+
+      try {
+        var res = await http.get(Uri.parse(url));
+        if (res.statusCode == 200) {
+          await file.writeAsBytes(res.bodyBytes);
+
+          await notificationsPlugin.show(
+            0,
+            'Download Complete',
+            'File saved to Download/TeacherApp/Remarks/$name',
+            platformChannelSpecifics,
+            payload: path,
+          );
+
+          _showSnackBar(context, 'File downloaded successfully: Download/TeacherApp/Remarks');
+        } else {
+          await notificationsPlugin.show(
+            0,
+            'Download Failed',
+            'Failed to download file: ${res.statusCode}',
+            platformChannelSpecifics,
+          );
+          _showSnackBar(context, 'Failed to download file: ${res.statusCode}');
+        }
+      } catch (e) {
+        await notificationsPlugin.show(
+          0,
+          'Download Failed',
+          'Failed to download file',
+          platformChannelSpecifics,
+        );
+        _showSnackBar(context, 'Failed to download file: $e');
+      } finally {
+        isDownloading.value = false;
+      }
+    }
+
+    Future<void> _downloadFileIOS(String url, String fileName, FlutterLocalNotificationsPlugin notificationsPlugin) async {
+      isDownloading.value = true;
+
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+        'download_channel',
+        'Download Channel',
+        channelDescription: 'Notifications for file downloads',
+        importance: Importance.high,
+        priority: Priority.high,
+        showProgress: true,
+        onlyAlertOnce: true,
+      );
+
+      const NotificationDetails platformChannelSpecifics =
+      NotificationDetails(android: androidPlatformChannelSpecifics);
+
+      try {
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = '${directory.path}/$fileName';
+        final file = File(filePath);
+
+        final response = await http.get(Uri.parse(url));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+
+          await notificationsPlugin.show(
+            0,
+            'Download Complete',
+            'File saved to $filePath',
+            platformChannelSpecifics,
+            payload: filePath,
+          );
+
+          _showSnackBar(context, 'Find it in the Files/On My iPhone/Teacher App/Remarks.');
+        } else {
+          await notificationsPlugin.show(
+            0,
+            'Download Failed',
+            'Failed to download file: ${response.statusCode}',
+            platformChannelSpecifics,
+          );
+          _showSnackBar(context, 'Failed to download file: ${response.statusCode}');
+        }
+      } catch (e) {
+        await notificationsPlugin.show(
+          0,
+          'Download Failed',
+          'Failed to download file',
+          platformChannelSpecifics,
+        );
+        _showSnackBar(context, 'Failed to download file: $e');
+      } finally {
+        isDownloading.value = false;
+      }
+    }
+
+    // Advanced download functions
+    Future<void> _handleDownload(RemarkAttachment attachment) async {
+
+      try {
+        if (attachment.fileSize == "0") {
+          _showSnackBar(context, 'File not uploaded properly');
+        } else {
+          String originalUrl = attachment.url; // e.g., "https://sms.arnoldcentralschool.org/SACSv4test/uploads/remark/03-09-2025"
+          String reformattedDateStr;
+          String baseDownloadUrl = originalUrl;
+
+          RegExp dateRegExp = RegExp(r'(\d{2}-\d{2}-\d{4})');
+          Match? dateMatch = dateRegExp.firstMatch(originalUrl);
+
+          if (dateMatch != null && dateMatch.group(0) != null) {
+            String extractedDate = dateMatch.group(0)!;
+            try {
+              // Parse the extracted date (dd-MM-yyyy)
+              DateFormat inputFormat = DateFormat('dd-MM-yyyy');
+              DateTime parsedDate = inputFormat.parse(extractedDate);
+              DateFormat outputFormat = DateFormat('yyyy-MM-dd');
+              reformattedDateStr = outputFormat.format(parsedDate); // e.g., "2025-09-03"
+              print('Original Date from URL: $extractedDate');
+              print('Reformatted Date: $reformattedDateStr');
+              baseDownloadUrl = originalUrl.replaceFirst(extractedDate, reformattedDateStr);
+              print('Potentially modified base URL for download: $baseDownloadUrl');
+
+            } catch (e) {
+              print('Error parsing or formatting date from URL: $e');
+              reformattedDateStr = "N/A"; // Or handle as an error
+            }
+          } else {
+            print('Date not found in URL path or format is unexpected.');
+            reformattedDateStr = "N/A";
+          }
+          String downloadUrl = '$baseDownloadUrl/${attachment.imageName}';
+          print('Download URL: $downloadUrl');
+
+          if (Platform.isAndroid) {
+            await _downloadFileAndroid(downloadUrl, context, attachment.imageName, flutterLocalNotificationsPlugin);
+          } else if (Platform.isIOS) {
+            await _downloadFileIOS(downloadUrl, attachment.imageName, flutterLocalNotificationsPlugin);
+          } else {
+            _showSnackBar(context, 'Unsupported platform');
+          }
+        }
+      } catch (e) {
+        _showSnackBar(context, 'Failed to download file: $e');
+      }
+    }
+
+    Future<void> onOpenAttachment(String url) async {
+      String originalUrl = url; // e.g., "https://sms.arnoldcentralschool.org/SACSv4test/uploads/remark/03-09-2025"
+      String reformattedDateStr;
+      String baseDownloadUrl = originalUrl;
+
+      RegExp dateRegExp = RegExp(r'(\d{2}-\d{2}-\d{4})');
+      Match? dateMatch = dateRegExp.firstMatch(originalUrl);
+
+      if (dateMatch != null && dateMatch.group(0) != null) {
+        String extractedDate = dateMatch.group(0)!;
+        try {
+          // Parse the extracted date (dd-MM-yyyy)
+          DateFormat inputFormat = DateFormat('dd-MM-yyyy');
+          DateTime parsedDate = inputFormat.parse(extractedDate);
+          DateFormat outputFormat = DateFormat('yyyy-MM-dd');
+          reformattedDateStr = outputFormat.format(parsedDate); // e.g., "2025-09-03"
+          print('Original Date from URL: $extractedDate');
+          print('Reformatted Date: $reformattedDateStr');
+          baseDownloadUrl = originalUrl.replaceFirst(extractedDate, reformattedDateStr);
+          print('Potentially modified base URL for download: $baseDownloadUrl');
+
+        } catch (e) {
+          print('Error parsing or formatting date from URL: $e');
+          reformattedDateStr = "N/A"; // Or handle as an error
+        }
+      } else {
+        print('Date not found in URL path or format is unexpected.');
+        reformattedDateStr = "N/A";
+      }
+      final uri = Uri.tryParse(baseDownloadUrl);
+      if (uri == null) {
+        _showSnackBar(context, 'Invalid attachment URL');
+        return;
+      }
+      try {
+        if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+          _showSnackBar(context, 'Could not open attachment');
+        }
+      } catch (e) {
+        _showSnackBar(context, 'Error opening attachment: $e');
+      }
+    }
+
+    // Attachments upload handler (now tracks newlyUploadedFileNames and does optimistic UI update)
     Future<void> uploadAttachment() async {
       final result = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
       if (result == null || result.files.isEmpty) return;
@@ -70,48 +320,102 @@ class EditRemark extends HookConsumerWidget {
       final auth = ref.read(authProvider).requireValue;
       bool allOk = true;
 
+      // Keep list of names uploaded in this call
+      final List<String> uploadedThisCall = [];
+
       for (final file in result.files) {
         try {
           final uploadOk = await remarkService.uploadRemarkDocument(
-            studentIds: json.encode([remark.studentId]),
+            studentIds: json.encode([remark.remarkId]),
             shortName: auth.teacherVerification?.shortName ?? '',
             filename: file.name,
             fileBytes: file.bytes!,
-            uploadDate: _dateController.text,
+            uploadDate: formatDateForApi(_dateController.text),
+
           );
-          if (!uploadOk) {
+          if (uploadOk) {
+            uploadedThisCall.add(file.name);
+            // Optimistic UI: add a local RemarkAttachment so the user sees it immediately.
+            // We try to reuse existing attachment.url if present, otherwise empty string.
+            final baseUrl = attachments.value.isNotEmpty ? attachments.value.first.url : '';
+            final sizeStr = file.size != null ? file.size.toString() : (file.bytes?.length.toString() ?? '0');
+            attachments.value = [
+              ...attachments.value,
+              RemarkAttachment(remarkId : remark.remarkId,imageName: file.name, fileSize: sizeStr, url: baseUrl)
+            ];
+          } else {
             allOk = false;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to upload ${file.name}')),
-            );
+            _showSnackBar(context, 'Failed to upload ${file.name}');
           }
         } catch (e) {
           allOk = false;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error uploading ${file.name}: $e')),
-          );
+          _showSnackBar(context, 'Error uploading ${file.name}: $e');
         }
       }
 
       uploading.value = false;
+
+      if (uploadedThisCall.isNotEmpty) {
+        newlyUploadedFileNames.value = [
+          ...newlyUploadedFileNames.value,
+          ...uploadedThisCall
+        ];
+      }
+
       if (allOk) {
+        // The server may take a moment to return uploaded files; poll a few times,
+        // but keep optimistic attachments already added so UI is responsive.
         loadingAttachments.value = true;
-        final remarkService = ref.read(remarkServiceProvider);
-        final auth = ref.read(authProvider).requireValue;
-        try {
-          final res = await remarkService.getRemarkImages(
-            remarkId: remark.remarkId,
-            remarkDate: _dateController.text,
-            shortName: auth.teacherVerification?.shortName ?? '',
-          );
-          attachments.value = res.cast<RemarkAttachment>();
-          // attachmentUrl.value = attachments.value.isNotEmpty ? attachments.value.url : "";
-        } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to load attachments: $e')),
-          );
+        List<RemarkAttachment> res = [];
+        bool foundUploaded = false;
+        for (int attempt = 0; attempt < 5; attempt++) {
+          try {
+            await Future.delayed(Duration(milliseconds: attempt == 0 ? 500 : 1000));
+            res = await remarkService.getRemarkImages(
+              remarkId: remark.remarkId,
+              remarkDate: formatDateForApi(_dateController.text),
+              shortName: auth.teacherVerification?.shortName ?? '',
+            );
+            if (res.isNotEmpty && newlyUploadedFileNames.value.isNotEmpty) {
+              final returnedNames = res.map((r) => r.imageName).toSet();
+              final intersection = newlyUploadedFileNames.value.where((n) => returnedNames.contains(n));
+              if (intersection.isNotEmpty) {
+                foundUploaded = true;
+                break;
+              }
+            } else if (res.isNotEmpty && newlyUploadedFileNames.value.isEmpty) {
+              foundUploaded = true;
+              break;
+            }
+          } catch (e) {
+            print('Error while fetching attachments (attempt ${attempt + 1}): $e');
+          }
         }
+
+        // Final fetch attempt to ensure latest
+        // try {
+        //   res = await remarkService.getRemarkImages(
+        //     remarkId: remark.remarkId,
+        //     remarkDate: formatDateForApi(_dateController.text),
+        //     shortName: auth.teacherVerification?.shortName ?? '',
+        //   );
+        // } catch (e) {
+        //   print('Final fetch failed: $e');
+        // }
+        //
+        // // If server returned attachments, replace attachments.value with authoritative list.
+        // if (res.isNotEmpty) {
+        //   attachments.value = res;
+        // }
+
         loadingAttachments.value = false;
+
+        if (foundUploaded) {
+          _showSnackBar(context, 'Files uploaded successfully!');
+        } else {
+          _showSnackBar(context,
+              'Files uploaded successfully, but server did not return them yet. They will appear shortly.');
+        }
       }
     }
 
@@ -120,92 +424,49 @@ class EditRemark extends HookConsumerWidget {
       final auth = ref.read(authProvider).requireValue;
 
       try {
-        final ok = await remarkService.deleteRemarkDocument(
-          upload_date: _dateController.text,
-          student_id: json.encode([remark.remarkId]),
+        attachments.value = attachments.value.where((a) => a.imageName != att.imageName).toList();
+        final remarkIdArray = json.encode([remark.remarkId]);
+        final attArray = json.encode([att.imageName]);
+
+        print("🧨 DELETING ATTACHMENT:");
+        print("  Filename: ${att.imageName}");
+        print("  Remark ID Array: $remarkIdArray");
+        print("  Upload Date: ${_dateController.text}");
+        print("  Short Name: ${auth.teacherVerification?.shortName}");
+
+        final ok = await remarkService.NdeleteRemarkDocument(
+          upload_date: formatDateForApi(_dateController.text),
           shortName: auth.teacherVerification?.shortName ?? '',
           filename: att.imageName,
+          student_id: remarkIdArray,
         );
+
         if (ok) {
-          // refresh
+          // Refresh attachments from server
           final res = await remarkService.getRemarkImages(
             remarkId: remark.remarkId,
-            remarkDate: _dateController.text,
+            remarkDate: formatDateForApi(_dateController.text),
             shortName: auth.teacherVerification?.shortName ?? '',
           );
-          attachments.value = res.cast<RemarkAttachment>();
-          // attachmentUrl.value = attachments.value.isNotEmpty ? attachments.value.url : "";
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Attachment Deleted ${att.imageName}')));
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Attachment Delete failed!')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Delete error: $e')));
-      }
-    }
+          attachments.value = res;
+          _showSnackBar(context, 'Attachment deleted successfully');
 
-    Future<void> onDownload(String filename) async {
-      try {
-        final response = await http.get(Uri.parse(filename));
-        if (response.statusCode == 200) {
-          // Use any downloading logic (such as download() from your library)
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('File downloaded successfully: $filename'),
-              backgroundColor: Colors.green,
-            ),
-          );
+          // Also remove from newlyUploadedFileNames if it was uploaded in this session
+          newlyUploadedFileNames.value = newlyUploadedFileNames.value.where((n) => n != att.imageName).toList();
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to download file: $filename'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          // _showSnackBar(context, 'Failed to delete attachment');
         }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error downloading file: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-
-    Future<void> onOpenAttachment(String url) async {
-      final uri = Uri.tryParse(url);
-      if (uri == null) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Invalid attachment URL')));
-        return;
-      }
-      try {
-        if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Could not open attachment')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error opening attachment: $e')));
-      }
+        print("❌ DELETE ERROR DETAILS: $e");
+        _showSnackBar(context, 'Error: ${e.toString()}');
+      } finally {}
     }
 
     void _resetForm() {
       _dateController.text = remark.remarkDate.split(' ').first;
       _subjectOfRemarkController.text = remark.remarkSubject;
-      _remarkController.text = remark.remarkType;
-    }
-
-    String formatDateForApi(String date) {
-      final parts = date.split('-');
-      if (parts.length == 3 && parts.length == 4) {
-        return '${parts[2]}-${parts[1]}-${parts}';
-      }
-      return date;
+      _remarkController.text = remark.remarkDesc;
+      // Do not clear attachments on reset; only UI fields
     }
 
     Future<void> _saveRemark() async {
@@ -215,7 +476,36 @@ class EditRemark extends HookConsumerWidget {
       try {
         final formattedDate = formatDateForApi(_dateController.text);
 
-        final success = await remarkService.updateRemark(
+        // Fetch current attachments from API
+        final currentAttachments = await remarkService.getRemarkImages(
+          remarkId: remark.remarkId,
+          remarkDate: formattedDate,
+          shortName: auth.teacherVerification?.shortName ?? '',
+        );
+
+        final currentFilenames = currentAttachments.map((a) => a.imageName).toSet();
+        final remainingFilenames = attachments.value.map((a) => a.imageName).toSet();
+
+        // Deleted files = files in current but not in remaining
+        final filesToDelete = currentFilenames.difference(remainingFilenames);
+
+        // Prepare filenames to send
+        final namesToSend = [
+          ...remainingFilenames.where((name) => !filesToDelete.contains(name)),
+          ...newlyUploadedFileNames.value,
+        ];
+
+        final String fileNamePayload =
+        namesToSend.isNotEmpty ? json.encode(namesToSend) : "";
+
+        final String deleteFilesPayload =
+        filesToDelete.isNotEmpty ? json.encode(filesToDelete.toList()) : "";
+
+        print('📤 Saving remark...');
+        print('➡️ Filenames payload: $fileNamePayload');
+        print('➡️ Delete files payload: $deleteFilesPayload');
+
+        final res = await remarkService.updateRemark(
           remarkId: remark.remarkId,
           remarkSubject: _subjectOfRemarkController.text,
           remarkDesc: _remarkController.text,
@@ -230,25 +520,26 @@ class EditRemark extends HookConsumerWidget {
           remarkType: remark.remarkType,
           publish: "N",
           acknowledge: "N",
-          fileName: attachments.value.isNotEmpty ? attachments.value.map((a) => a.imageName).join(",") : "",
+          fileName: fileNamePayload,
+          deleteFiles: deleteFilesPayload,
         );
 
-        if (success['status'] == true) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Remark Updated Successfully!")),
-          );
+        // ✅ Cleaned response from updateRemark
+        if (res['status'] == true) {
+          newlyUploadedFileNames.value = []; // clear after success
+          _showSnackBar(context, res['success_msg'] ?? "✅ Remark Updated Successfully!");
           Navigator.of(context).pop(true);
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(success['error_msg'] ?? "Failed to update remark")),
-          );
+          _showSnackBar(context, res['error_msg'] ?? "❌ Failed to update remark");
         }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error updating remark: $e")),
-        );
+      } catch (e, st) {
+        print("❌ Exception in _saveRemark: $e");
+        print(st);
+        _showSnackBar(context, "Error updating remark: $e");
       }
     }
+
+
 
     Widget _readonlyTile(String label) => Container(
       width: double.infinity,
@@ -323,7 +614,7 @@ class EditRemark extends HookConsumerWidget {
                   const Text("*Remark", style: TextStyle(fontWeight: FontWeight.bold)),
                   TextField(
                     controller: _remarkController,
-                    maxLines: 3,
+                    maxLines: 5,
                     decoration: InputDecoration(
                       hintText: "Type here...",
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r)),
@@ -335,16 +626,15 @@ class EditRemark extends HookConsumerWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text("Attachments", style: TextStyle(fontWeight: FontWeight.bold)),
-                      uploading.value
-                          ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                          : IconButton(
-                        icon: const Icon(Icons.attach_file, color: Colors.blue),
-                        onPressed: uploading.value ? null : uploadAttachment,
-                      ),
+                      if (isDownloading.value)
+                        const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      else if (uploading.value)
+                        const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      else
+                        IconButton(
+                          icon: const Icon(Icons.attach_file, color: Colors.blue),
+                          onPressed: uploadAttachment,
+                        ),
                     ],
                   ),
 
@@ -358,36 +648,45 @@ class EditRemark extends HookConsumerWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: attachments.value.map((att) {
-                        final url = "${att.url}/${att.imageName}";
+                        final url = att.url != null && att.url!.isNotEmpty ? "${att.url}/${att.imageName}" : '';
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 2),
                           child: Row(
                             children: [
-                              if(att.imageName.contains('.jpg'))
-                                 Icon(Icons.remove_red_eye, color: Colors.redAccent
+                              if(att.imageName.isNotEmpty)
 
-                              ) else  Icon(Icons.insert_drive_file, color: Colors.blue),
+                              if(att.imageName.contains('.jpg') || att.imageName.contains('.png'))
+                                const Icon(Icons.image, color: Colors.redAccent, size: 24)
+                              else
+                                const Icon(Icons.insert_drive_file, color: Colors.blue, size: 24),
 
                               const SizedBox(width: 5),
-
-                              if(att.imageName.contains('.jpg'))
+                              if(att.imageName.isNotEmpty)
                               Expanded(
-                                child: TextButton( onPressed: () {
-                                  onOpenAttachment(url);
-                                },
-                                child: Text(att.imageName, style: const TextStyle(fontSize: 13))),
-                              ) else Expanded(
-                                child: TextButton( onPressed: () {
-                                  // onOpenAttachment(url);
-                                },
-                                    child: Text(att.imageName, style: const TextStyle(color:Colors.black,fontSize: 13))),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(att.imageName, style: TextStyle(fontSize: 14.sp)),
+                                    Text(
+                                      "Size: ${_formatFileSize(att.fileSize)}",
+                                      style: TextStyle(fontSize: 12.sp, color: Colors.grey),
+                                    ),
+                                  ],
+                                ),
                               ),
+
+                              if((att.imageName.contains('.jpg') || att.imageName.contains('.png')) && url.isNotEmpty)
+                                if(att.imageName.isNotEmpty)
+                                IconButton(
+                                  icon: const Icon(Icons.remove_red_eye, color: Colors.green),
+                                  onPressed: () => onOpenAttachment(url),
+                                ),
+                              if(att.imageName.isNotEmpty)
                               IconButton(
                                 icon: const Icon(Icons.download, color: Colors.blue),
-                                onPressed: () {
-                                  onDownload(url);
-                                  },
+                                onPressed: isDownloading.value || (url.isEmpty) ? null : () => _handleDownload(att),
                               ),
+                              if(att.imageName.isNotEmpty)
                               IconButton(
                                 icon: const Icon(Icons.delete, color: Colors.red),
                                 onPressed: () => deleteAttachment(att),
@@ -439,6 +738,27 @@ class EditRemark extends HookConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+  String _formatFileSize(String? sizeInBytes) {
+    if (sizeInBytes == null || sizeInBytes.isEmpty) return "Unknown";
+
+    final bytes = double.tryParse(sizeInBytes) ?? 0;
+
+    if (bytes < 1024) {
+      return "${bytes.toStringAsFixed(0)} B";
+    } else if (bytes < 1024 * 1024) {
+      return "${(bytes / 1024).toStringAsFixed(2)} KB";
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
+    } else {
+      return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
+    }
+  }
+
+  void _showSnackBar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 }

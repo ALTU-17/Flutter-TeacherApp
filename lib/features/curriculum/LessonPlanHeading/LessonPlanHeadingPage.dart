@@ -46,7 +46,7 @@ class LessonPlanHeadingPage extends HookConsumerWidget {
           child: headingsAsync.when(
             data: (headings) {
               if (headings.isEmpty) {
-                return const Center(child: Text("No headings found"));
+                return const Center(child: Text("No Headings found"));
               }
               return Column(
                 children: [
@@ -95,11 +95,12 @@ class LessonPlanHeadingPage extends HookConsumerWidget {
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
+                                      if(heading.isUsed != 'Y')
                                       IconButton(
                                         icon: const Icon(Icons.edit, color: Colors.blue),
                                         tooltip: "Edit Heading",
-                                        onPressed: () {
-                                          Navigator.push(
+                                        onPressed: () async {
+                                          final changed = await Navigator.push(
                                             context,
                                             MaterialPageRoute(
                                               builder: (_) => EditLessonPlanHeadingPage(
@@ -107,12 +108,19 @@ class LessonPlanHeadingPage extends HookConsumerWidget {
                                                 heading: heading.title,
                                                 sequence: heading.sequence,
                                                 changeDaily: heading.changeDaily == "Y",
-                                                // pass id if needed
                                               ),
                                             ),
                                           );
+                                          if (changed == true) {
+// Either invalidate to refresh next read, or refresh immediately:
+// ref.invalidate(lessonPlanHeadingProvider);
+// refresh on next watch
+                                            ref.refresh(lessonPlanHeadingProvider); // refresh now and rebuild
+                                          }
                                         },
                                       ),
+
+                                      if(heading.isUsed != 'Y')
                                       IconButton(
                                           icon: const Icon(Icons.delete, color: Colors.red),
                                           tooltip: "Delete Heading",
@@ -135,7 +143,7 @@ class LessonPlanHeadingPage extends HookConsumerWidget {
                                               ),
                                             );
                                             if (confirmed == true && context.mounted) {
-                                              // Call delete API
+
                                               final auth = ref.read(authProvider).requireValue;
                                               final dio = await ref.read(apiClientProvider.future);
                                               final service = LessonPlanHeadingService(
@@ -147,7 +155,7 @@ class LessonPlanHeadingPage extends HookConsumerWidget {
                                               if (success) {
                                                 ref.invalidate(lessonPlanHeadingProvider);
                                                 ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(content: Text("Deleted!")));
+                                                    SnackBar(content: Text("Lesson Plan Heading Deleted!")));
                                               } else {
                                                 ScaffoldMessenger.of(context).showSnackBar(
                                                     SnackBar(content: Text("Delete failed!")));
