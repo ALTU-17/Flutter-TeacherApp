@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import '../models/chapter.dart';
 import '../models/create_chapter_request.dart';
@@ -129,7 +131,7 @@ class ChapterService {
     required String loginType,
     required String description,
     required String regId,
-    // required String smId,
+    required String smId,
     required String academicYr,
     String subSubject = '',
   }) async {
@@ -144,7 +146,7 @@ class ChapterService {
         'login_type': loginType,
         'description': description,
         'reg_id': regId,
-        // 'sm_id': smId,
+        'sm_id': smId,
         'operation': 'edit',
         'acd_yr': academicYr,
         'sub_subject': subSubject,
@@ -169,5 +171,28 @@ class ChapterService {
       },
     );
     return res.data;
+  }
+
+  Future<bool> deleteChapter({
+    required String shortName,
+    required String chapterId,
+    String operation = 'delete',
+    String loginType = 'T',
+  }) async {
+    try {
+      final res = await apiClient.post(
+        '${baseUrl}CurriculumApi/chapters',
+        data: {
+          'short_name': shortName,
+          'operation': operation,
+          'login_type': loginType,
+          'chapter_id': chapterId,
+        },
+      );
+      final data = res.data is String ? json.decode(res.data) : res.data;
+      return data['status'] == true;
+    } catch (e) {
+      return false;
+    }
   }
 }

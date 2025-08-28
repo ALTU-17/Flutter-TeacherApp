@@ -1,49 +1,44 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../../auth/providers/auth_provider.dart';
 
-class LessonPlanPage extends StatefulWidget {
+class LessonPlanPage extends ConsumerStatefulWidget {
   const LessonPlanPage({Key? key}) : super(key: key);
 
   @override
-  State<LessonPlanPage> createState() => _LessonPlanTemplatePageState();
+  ConsumerState<LessonPlanPage> createState() => _LessonPlanPageState();
 }
 
-class _LessonPlanTemplatePageState extends State<LessonPlanPage> {
+class _LessonPlanPageState extends ConsumerState<LessonPlanPage> {
   bool _isLoading = true;
-
-  final String shortName = "SACS";
-  final String regId = "14";
-  final String acdYr = "2025";
-  final String newUrl = "https://sms.arnoldcentralschool.org/SACSv4test/index.php/";
   late final WebViewController _controller;
 
   @override
   void initState() {
     super.initState();
 
-    // print("WEBVIEW URL: " +
-    //     widget.smartchat_url +
-    //     '?student_id=${widget.studentId}&academic_yr=${widget.academicYr}');
+    /// Get dynamic values from authProvider
+    final auth = ref.read(authProvider).requireValue;
+
+    final String shortName = auth.teacherVerification?.shortName ?? '';
+    final String regId = auth.regId ?? '';
+    final String acdYr = auth.academicYr ?? '';
+    final String newUrl = auth.teacherVerification?.teacherapkUrl ?? '';
+
+    final lessonPlanUrl =
+        "$newUrl/curriculum/apk_lesson_plan?reg_id=$regId&acd_yr=$acdYr&login_type=T";
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (url) {
-            setState(() {
-              _isLoading = true; // Show loading indicator when page starts loading
-            });
-          },
-          onPageFinished: (url) {
-            setState(() {
-              _isLoading = false; // Hide loading indicator when page finishes loading
-            });
-          },
+          onPageStarted: (_) => setState(() => _isLoading = true),
+          onPageFinished: (_) => setState(() => _isLoading = false),
         ),
       )
-      ..loadRequest(Uri.parse(newUrl+"curriculum/apk_lesson_plan?reg_id=${regId}&acd_yr=${acdYr}&login_type=T"
-      ));
+      ..loadRequest(Uri.parse(lessonPlanUrl));
   }
 
   @override
@@ -85,8 +80,8 @@ class _LessonPlanTemplatePageState extends State<LessonPlanPage> {
             ),
           ),
           if (_isLoading)
-            Center(
-              child: CircularProgressIndicator(), // Display loading spinner
+            const Center(
+              child: CircularProgressIndicator(),
             ),
         ],
       ),

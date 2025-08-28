@@ -20,14 +20,32 @@ class CreateLessonPlanHeadingPage extends HookConsumerWidget {
       _changeDaily.value = false;
     }
 
+    bool _isDuplicateSequence(String seq) {
+      final state = ref.read(lessonPlanHeadingProvider);
+      final list = state.hasValue ? state.value! : <dynamic>[];
+      final v = seq.trim();
+      return list.any((h) => (h.sequence.trim() == v));
+    }
+
     Future<void> _onSave() async {
+      // First run form validators
       if (!_formKey.currentState!.validate()) return;
+
+      // Extra safety: re-check duplicate just before API call
+      final seqNow = _sequenceController.text.trim();
+      if (_isDuplicateSequence(seqNow)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sequence already exists. Enter a unique value.')),
+        );
+        return;
+      }
+
       final auth = ref.read(authProvider).requireValue;
       final service = ref.read(lessonPlanHeadingCreateProvider);
 
       final result = await service.createHeading(
-        sequence: _sequenceController.text,
-        name: _headingController.text,
+        sequence: seqNow,
+        name: _headingController.text.trim(),
         shortName: auth.teacherVerification?.shortName ?? '',
         changeDaily: _changeDaily.value,
       );
@@ -36,14 +54,13 @@ class CreateLessonPlanHeadingPage extends HookConsumerWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Lesson Plan Heading Saved!')),
         );
-        Navigator.pop(context, true); // Optional: Return to list and refresh
+        Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(result['error_msg'] ?? 'Create failed')),
         );
       }
     }
-
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -108,17 +125,23 @@ class CreateLessonPlanHeadingPage extends HookConsumerWidget {
                         ),
                         keyboardType: TextInputType.number,
                         validator: (value) {
-                          if (value == null || value.isEmpty) {
+                          final v = value?.trim() ?? '';
+                          if (v.isEmpty) {
                             return 'Please enter a sequence number.';
                           }
-                          if (int.tryParse(value) == null) {
+                          if (int.tryParse(v) == null) {
                             return 'Please enter a valid number.';
+                          }
+
+                          if (_isDuplicateSequence(v)) {
+                            return 'Sequence already exists. Enter a unique value.';
                           }
                           return null;
                         },
                       ),
                       SizedBox(height: 16.h),
 
+                      // Change daily
                       ValueListenableBuilder<bool>(
                         valueListenable: _changeDaily,
                         builder: (context, value, _) => Row(
@@ -136,6 +159,7 @@ class CreateLessonPlanHeadingPage extends HookConsumerWidget {
                       ),
                       SizedBox(height: 32.h),
 
+                      // Actions
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -146,8 +170,7 @@ class CreateLessonPlanHeadingPage extends HookConsumerWidget {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(20.r),
                               ),
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: 25.w, vertical: 12.h),
+                              padding: EdgeInsets.symmetric(horizontal: 25.w, vertical: 12.h),
                             ),
                             child: Text(
                               'Save',
@@ -161,8 +184,7 @@ class CreateLessonPlanHeadingPage extends HookConsumerWidget {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(20.r),
                               ),
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: 25.w, vertical: 12.h),
+                              padding: EdgeInsets.symmetric(horizontal: 25.w, vertical: 12.h),
                             ),
                             child: Text(
                               'Reset',

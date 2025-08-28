@@ -42,7 +42,7 @@ class ChaptersPage extends HookConsumerWidget {
         ),
         child: chaptersAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (err, _) => Center(child: Text('Error: $err')),
+          error: (err, _) => Center(child: Text("No Chapters found")),
           data: (chapters) => ChaptersListBody(chapters: chapters),
         ),
       ),
@@ -54,13 +54,12 @@ class ChaptersPage extends HookConsumerWidget {
             MaterialPageRoute(builder: (_) => const CreateChapterPage()),
           );
           if (result == true) {
-            // Replace `chapterListProvider` with your actual provider name
-            ref.invalidate(chapterServiceProvider);
+            // Refresh the chapter list
+            ref.invalidate(chapterListPProvider);
           }
         },
         child: const Icon(Icons.add, color: Colors.white),
       ),
-
     );
   }
 }
@@ -73,15 +72,28 @@ class ChaptersListBody extends ConsumerStatefulWidget {
   ConsumerState<ChaptersListBody> createState() => _ChaptersListBodyState();
 }
 
-
 class _ChaptersListBodyState extends ConsumerState<ChaptersListBody> {
   bool selectAll = false;
-  late List<Chapter> chapters;
+  List<Chapter> localChapters = []; // Local mutable copy
 
   @override
   void initState() {
     super.initState();
-    chapters = widget.chapters;
+    // Initialize local copy from widget data
+    localChapters = List.from(widget.chapters);
+    selectAll = localChapters.isNotEmpty && localChapters.every((c) => c.isSelected);
+  }
+
+  @override
+  void didUpdateWidget(ChaptersListBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Update local chapters when parent data changes
+    if (oldWidget.chapters != widget.chapters) {
+      setState(() {
+        localChapters = List.from(widget.chapters);
+        selectAll = localChapters.isNotEmpty && localChapters.every((c) => c.isSelected);
+      });
+    }
   }
 
   @override
@@ -95,7 +107,10 @@ class _ChaptersListBodyState extends ConsumerState<ChaptersListBody> {
             children: [
               ElevatedButton.icon(
                 icon: const Icon(Icons.publish, size: 18),
-                label: Text('Publish Selected', style: TextStyle(fontSize: 14.sp, color: Colors.white)),
+                label: Text(
+                  'Publish Selected',
+                  style: TextStyle(fontSize: 14.sp, color: Colors.white),
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.orangeAccent,
                   shape: RoundedRectangleBorder(
@@ -103,15 +118,36 @@ class _ChaptersListBodyState extends ConsumerState<ChaptersListBody> {
                   ),
                   padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
                 ),
-                onPressed: () {
-                  final selected = chapters.where((c) => c.isSelected).toList();
+                onPressed: () async {
+                  final selected = localChapters.where((c) => c.isSelected).toList();
                   if (selected.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Please select at least one chapter')),
+                      const SnackBar(
+                          content: Text('Please select at least one chapter')),
                     );
                     return;
                   }
-                  _publishChapters(selected);
+
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Confirm Publish'),
+                      content: Text(
+                          'Publish ${selected.length} selected chapter(s)?'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Cancel')),
+                        TextButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Publish')),
+                      ],
+                    ),
+                  );
+
+                  if (confirm == true) {
+                    _publishChapters(selected);
+                  }
                 },
               ),
               const Spacer(),
@@ -125,8 +161,8 @@ class _ChaptersListBodyState extends ConsumerState<ChaptersListBody> {
                 onPressed: () {
                   setState(() {
                     selectAll = !selectAll;
-                    for (var i = 0; i < chapters.length; i++) {
-                      chapters[i] = chapters[i].copyWith(isSelected: selectAll);
+                    for (int i = 0; i < localChapters.length; i++) {
+                      localChapters[i] = localChapters[i].copyWith(isSelected: selectAll);
                     }
                   });
                 },
@@ -141,70 +177,112 @@ class _ChaptersListBodyState extends ConsumerState<ChaptersListBody> {
         Expanded(
           child: ListView.builder(
             padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 0.h),
-            itemCount: chapters.length,
+            itemCount: localChapters.length,
             itemBuilder: (context, index) {
-              final chapter = chapters[index];
+              final chapter = localChapters[index];
               return ChapterCard(
                 chapter: chapter,
                 onSelectionChanged: (selected) {
                   setState(() {
-                    chapters[index] = chapter.copyWith(isSelected: selected);
-                    selectAll = chapters.every((c) => c.isSelected);
+                    localChapters[index] = chapter.copyWith(isSelected: selected);
+                    selectAll = localChapters.isNotEmpty && localChapters.every((c) => c.isSelected);
                   });
                 },
                 onPublishChanged: (published) {
                   setState(() {
-                    chapters[index] = chapter.copyWith(isPublished: published);
+                    localChapters[index] = chapter.copyWith(isPublished: published);
                   });
                 },
                 onEdit: () async {
-                  final result = await Navigator.push(
+                  final changed = await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => EditChapterPage(chapter: chapter),
                     ),
                   );
 
-                  // if (result == true) {
-                  //   // Refresh the list
-                  //   ref.invalidate(chapterServiceProvider);
-                  // }
-
+                  if (changed == true) {
+                    ref.invalidate(chapterListPProvider);
+                  }
                 },
+                onDelete: () => _confirmAndDeleteChapter(chapter),
               );
             },
           ),
         ),
       ],
     );
-
   }
 
+  Future<void> _confirmAndDeleteChapter(Chapter chapter) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Delete'),
+        content: Text('Delete chapter "${chapter.name ?? ''}"?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
 
-  Future<void> _publishChapters(List<Chapter> selectedChapters) async {
-    // Build comma-separated IDs:
-    final chapterIds = selectedChapters.map((c) => c.chapterId).whereType<String>().join(',');
+    if (confirm != true) return;
 
-    // Get auth:
     final auth = ref.read(authProvider).requireValue;
     final service = ref.read(chapterServiceProvider);
 
-    // Call API:
+    final ok = await service.deleteChapter(
+      shortName: auth.teacherVerification?.shortName ?? '',
+      chapterId: chapter.chapterId ?? '',
+    );
+
+    if (ok) {
+      // Update local list
+      setState(() {
+        localChapters.removeWhere((c) => c.chapterId == chapter.chapterId);
+        selectAll = localChapters.isNotEmpty && localChapters.every((c) => c.isSelected);
+      });
+
+      // Refresh provider data
+      ref.invalidate(chapterListPProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chapter deleted')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Delete failed')),
+      );
+    }
+  }
+
+  Future<void> _publishChapters(List<Chapter> selectedChapters) async {
+    final chapterIds = selectedChapters.map((c) => c.chapterId).whereType<String>().join(',');
+    final auth = ref.read(authProvider).requireValue;
+    final service = ref.read(chapterServiceProvider);
+
     final result = await service.publishChapters(
       shortName: auth.teacherVerification?.shortName ?? '',
       selectedChapterIds: chapterIds,
-      // operation & loginType can use default
     );
 
     if (result['status'] == true) {
       setState(() {
-        for (var i = 0; i < chapters.length; i++) {
-          if (selectedChapters.any((c) => c.chapterId == chapters[i].chapterId)) {
-            chapters[i] = chapters[i].copyWith(isPublished: true, isSelected: false);
+        for (int i = 0; i < localChapters.length; i++) {
+          if (selectedChapters.any((c) => c.chapterId == localChapters[i].chapterId)) {
+            localChapters[i] = localChapters[i].copyWith(
+                isPublished: true,
+                isSelected: false,
+                publish: 'Y'
+            );
           }
         }
         selectAll = false;
       });
+
       ref.invalidate(chapterListPProvider);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(result['success_msg'] ?? 'Published!')),
@@ -215,27 +293,16 @@ class _ChaptersListBodyState extends ConsumerState<ChaptersListBody> {
       );
     }
   }
-
-// void _publishChapters(List<Chapter> selectedChapters) {
-  //   setState(() {
-  //     for (var i = 0; i < chapters.length; i++) {
-  //       if (selectedChapters.contains(chapters[i])) {
-  //         chapters[i] = chapters[i].copyWith(isPublished: true, isSelected: false);
-  //       }
-  //     }
-  //     selectAll = false;
-  //   });
-  //   ScaffoldMessenger.of(context).showSnackBar(
-  //     SnackBar(content: Text('Published ${selectedChapters.length} chapters')),
-  //   );
-  // }
 }
+
+
 
 class ChapterCard extends StatelessWidget {
   final Chapter chapter;
   final ValueChanged<bool> onSelectionChanged;
   final ValueChanged<bool> onPublishChanged;
   final VoidCallback? onEdit;
+  final VoidCallback? onDelete; // add this
 
   const ChapterCard({
     super.key,
@@ -243,6 +310,7 @@ class ChapterCard extends StatelessWidget {
     required this.onSelectionChanged,
     required this.onPublishChanged,
     this.onEdit,
+    this.onDelete,
   });
 
   @override
@@ -258,18 +326,18 @@ class ChapterCard extends StatelessWidget {
           children: [
             _buildDetailRow(
               'Class',
-              '${chapter.className ?? ""} | ${chapter.subName ?? ""} | Lesson No: ${chapter.chapterNo ?? ""}',
+              '${chapter.className ?? ""}  |  ${chapter.subName ?? ""}  |   Lesson No: ${chapter.chapterNo ?? ""}',
             ),
             _buildDetailRow('Name', chapter.name ?? ""),
             if ((chapter.subSubject ?? '').isNotEmpty)
               _buildDetailRow('Sub-Subject', chapter.subSubject ?? ""),
             _buildDetailRow('Created By', chapter.tecName ?? ""),
-            SizedBox(height: 12.h),
+            SizedBox(height: 5.h),
 
+            if (chapter.publish != 'Y')
             Row(
               children: [
-                if (!chapter.isPublished)
-                  Checkbox(
+                Checkbox(
                     value: chapter.isSelected,
                     onChanged: (value) => onSelectionChanged(value ?? false),
                   ),
@@ -281,9 +349,7 @@ class ChapterCard extends StatelessWidget {
                 if (!chapter.isPublished)
                   IconButton(
                     icon: const Icon(Icons.delete, color: Colors.red),
-                    onPressed: () {
-                      // your delete logic
-                    },
+                    onPressed: onDelete,
                   ),
               ],
             ),

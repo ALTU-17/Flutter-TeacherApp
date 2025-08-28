@@ -406,7 +406,7 @@ class RemarkService {
         '${baseUrl}AdminApi/upload_remark_files',
         data: FormData.fromMap({
           // 'acd_yr': academicYr,
-          'student_id': studentIds,
+          'student_id': remarkId,
           'short_name': shortName,
           'datafile': base64Encode(fileBytes),
           'upload_date': uploadDate,
@@ -428,35 +428,102 @@ class RemarkService {
     }
   }
 
-  /// Delete a file/attachment for a Remark
   Future<bool> edeleteRemarkDocument({
-    required String academicYr,
-    required String teacherId,
-    required String shortName,
+    required String upload_date,
+    required String short_name,
     required String filename,
-    required String remarkId,
-    required String uploadDate,
+    required String student_id, // This should contain the remark ID, not student ID
   }) async {
     try {
+      // Create the exact same parameters as your Java code
+      final params = {
+        "upload_date": upload_date,
+        "short_name": short_name,
+        "doc_type_folder": "remark",
+        "filename": filename,
+        "student_id": student_id, // This should be the remark ID wrapped in array format
+      };
+
+      print("🗑️ DELETE API PARAMS:");
+      print("  upload_date: $upload_date");
+      print("  short_name: $short_name");
+      print("  filename: $filename");
+      print("  student_id: $student_id");
+
       final response = await apiClient.post(
         '${baseUrl}AdminApi/delete_uploaded_remark_files',
-        data: FormData.fromMap({
-          'upload_date': uploadDate,
-          'student_id': teacherId,
-          'short_name': shortName,
-          'filename': filename,
-          'doc_type_folder': "remark",
-        }),
+        data: params,
+        options: Options(
+          headers: {
+            "Content-Type": "application/json",
+          },
+        ),
       );
+
+      print("✅ DELETE RESPONSE:");
+      print("  Status: ${response.statusCode}");
+      print("  Headers: ${response.headers}");
+      print("  Data Type: ${response.data.runtimeType}");
+      print("  Data: ${response.data}");
+
       if (response.statusCode == 200) {
-        final jsonResponse = response.data is String
-            ? json.decode(response.data)
-            : response.data;
-        return jsonResponse['status'] == true;
+        // Handle different response types
+        dynamic responseData = response.data;
+
+        // If response is a string, try to parse it as JSON
+        if (responseData is String) {
+          if (responseData.isEmpty) {
+            print("⚠️ Empty response from server");
+            return false;
+          }
+
+          try {
+            responseData = json.decode(responseData);
+          } catch (e) {
+            print("⚠️ Response is not JSON: $responseData");
+            // Check if it contains success indicators
+            if (responseData.toLowerCase().contains('success') ||
+                responseData.toLowerCase().contains('true')) {
+              return true;
+            }
+            return false;
+          }
+        }
+
+        // Handle parsed JSON
+        if (responseData is Map<String, dynamic>) {
+          return responseData['status'] == true ||
+              responseData['success'] == true ||
+              (responseData['message']?.toString().toLowerCase().contains('success') ?? false);
+        }
+
+        return false;
       } else {
+        print("❌ Non-200 status code: ${response.statusCode}");
         return false;
       }
     } catch (e) {
+      print("❌ DELETE ERROR: $e");
+      if (e is DioError) {
+        print("Dio Error Type: ${e.type}");
+        print("Dio Error Message: ${e.message}");
+        print("Dio Error Response: ${e.response?.data}");
+        print("Dio Error Stack: ${e.stackTrace}");
+
+        // Handle specific Dio error types
+        if (e.type == DioErrorType.connectionTimeout ||
+            e.type == DioErrorType.receiveTimeout ||
+            e.type == DioErrorType.sendTimeout) {
+          print("⏰ Timeout error");
+        } else if (e.type == DioErrorType.badResponse) {
+          print("📉 Bad response error");
+          // The server responded with a non-200 status code
+          if (e.response != null) {
+            print("Response status: ${e.response!.statusCode}");
+            print("Response data: ${e.response!.data}");
+          }
+        }
+      }
       return false;
     }
   }

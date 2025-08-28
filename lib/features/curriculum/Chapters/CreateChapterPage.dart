@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../auth/providers/auth_provider.dart';
@@ -232,20 +233,26 @@ class CreateChapterPage extends HookConsumerWidget {
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _label(label),
+          _label(label), // Assuming _label function handles displaying the label text like "*Name"
           SizedBox(height: 5.h),
           TextFormField(
             controller: controller,
             keyboardType: keyboardType,
             decoration: _inputDecoration(hintText: hintText),
             validator: isRequired
-                ? (value) =>
-            value == null || value.isEmpty ? "Please enter $label" : null
+                ? (value) {
+              if (value == null || value.isEmpty) {
+                return "Please enter ${label.replaceAll('*', '').trim()}"; // Remove * from label in error
+              }
+              return null;
+            }
                 : null,
+            inputFormatters: [
+              FilteringTextInputFormatter.deny(RegExp(r'[*]')), // Deny the asterisk character
+            ],
           ),
         ],
       );
-
   Widget _actionButton({
     required String text,
     required Color color,

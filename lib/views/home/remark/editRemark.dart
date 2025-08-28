@@ -1,5 +1,5 @@
 import 'dart:convert';
-
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +9,10 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:teacherapp/views/home/remark/provider/remark_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../features/auth/providers/auth_provider.dart';
 import 'model/remark.dart';
@@ -23,7 +27,7 @@ class EditRemark extends HookConsumerWidget {
     // Controllers
     final _dateController = useTextEditingController(text: remark.remarkDate.split(' ').first);
     final _subjectOfRemarkController = useTextEditingController(text: remark.remarkSubject);
-    final _remarkController = useTextEditingController(text: remark.remarkType);
+    final _remarkController = useTextEditingController(text: remark.remarkDesc);
 
     final selectedSubject = useState<String>(remark.subName ?? "");
     final selectedClass = useState<String>("${remark.className} ${remark.secName}");
@@ -32,9 +36,26 @@ class EditRemark extends HookConsumerWidget {
     ]);
 
     final attachments = useState<List<RemarkAttachment>>([]);
-    final attachmentUrl = useState<String>("");
     final loadingAttachments = useState<bool>(false);
     final uploading = useState<bool>(false);
+    final isDownloading = useState<bool>(false);
+
+    // Initialize notifications plugin
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+    // Initialize notifications
+    useEffect(() {
+      Future.microtask(() async {
+        const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+        const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+        await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+      });
+      return null;
+    }, []);
 
     // Load attachments effect
     useEffect(() {
@@ -48,17 +69,194 @@ class EditRemark extends HookConsumerWidget {
             remarkDate: _dateController.text,
             shortName: auth.teacherVerification?.shortName ?? '',
           );
-          attachments.value = res.cast<RemarkAttachment>();
-          // attachmentUrl.value = attachments.value.isNotEmpty ? attachments.value. : "";
+          attachments.value = res;
         } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to load attachments: $e')),
-          );
+          _showSnackBar(context, 'Failed to load attachments: $e');
         }
         loadingAttachments.value = false;
       });
       return null;
     }, [_dateController.text]);
+
+
+
+
+
+    Future<void> _downloadFileAndroid(String url, BuildContext context, String name, FlutterLocalNotificationsPlugin notificationsPlugin) async {
+      isDownloading.value = true;
+
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+        'download_channel',
+        'Download Channel',
+        channelDescription: 'Notifications for file downloads',
+        importance: Importance.high,
+        priority: Priority.high,
+        showProgress: true,
+        onlyAlertOnce: true,
+      );
+
+      const NotificationDetails platformChannelSpecifics =
+      NotificationDetails(android: androidPlatformChannelSpecifics);
+
+      // Request storage permission
+      var status = await Permission.storage.status;
+      // if (!status.isGranted) {
+      //   status = await Permission.storage.request();
+      //   if (!status.isGranted) {
+      //     _showSnackBar(context, 'Storage permission denied');
+      //     isDownloading.value = false;
+      //     return;
+      //   }
+      // }
+
+      var directory = Directory("/storage/emulated/0/Download/TeacherApp/Remarks");
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+
+      var path = "${directory.path}/$name";
+      var file = File(path);
+
+      await notificationsPlugin.show(
+        0,
+        'Downloading Attachment',
+        'Downloading $name...',
+        platformChannelSpecifics,
+      );
+
+      try {
+        var res = await http.get(Uri.parse(url));
+        if (res.statusCode == 200) {
+          await file.writeAsBytes(res.bodyBytes);
+
+          await notificationsPlugin.show(
+            0,
+            'Download Complete',
+            'File saved to Download/TeacherApp/Remarks/$name',
+            platformChannelSpecifics,
+            payload: path,
+          );
+
+          _showSnackBar(context, 'File downloaded successfully: Download/TeacherApp/Remarks');
+        } else {
+          await notificationsPlugin.show(
+            0,
+            'Download Failed',
+            'Failed to download file: ${res.statusCode}',
+            platformChannelSpecifics,
+          );
+          _showSnackBar(context, 'Failed to download file: ${res.statusCode}');
+        }
+      } catch (e) {
+        await notificationsPlugin.show(
+          0,
+          'Download Failed',
+          'Failed to download file',
+          platformChannelSpecifics,
+        );
+        _showSnackBar(context, 'Failed to download file: $e');
+      } finally {
+        isDownloading.value = false;
+      }
+    }
+
+    Future<void> _downloadFileIOS(String url, String fileName, FlutterLocalNotificationsPlugin notificationsPlugin) async {
+      isDownloading.value = true;
+
+      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+        'download_channel',
+        'Download Channel',
+        channelDescription: 'Notifications for file downloads',
+        importance: Importance.high,
+        priority: Priority.high,
+        showProgress: true,
+        onlyAlertOnce: true,
+      );
+
+      const NotificationDetails platformChannelSpecifics =
+      NotificationDetails(android: androidPlatformChannelSpecifics);
+
+      try {
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = '${directory.path}/$fileName';
+        final file = File(filePath);
+
+        final response = await http.get(Uri.parse(url));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+
+          await notificationsPlugin.show(
+            0,
+            'Download Complete',
+            'File saved to $filePath',
+            platformChannelSpecifics,
+            payload: filePath,
+          );
+
+          _showSnackBar(context, 'Find it in the Files/On My iPhone/Teacher App/Remarks.');
+        } else {
+          await notificationsPlugin.show(
+            0,
+            'Download Failed',
+            'Failed to download file: ${response.statusCode}',
+            platformChannelSpecifics,
+          );
+          _showSnackBar(context, 'Failed to download file: ${response.statusCode}');
+        }
+      } catch (e) {
+        await notificationsPlugin.show(
+          0,
+          'Download Failed',
+          'Failed to download file',
+          platformChannelSpecifics,
+        );
+        _showSnackBar(context, 'Failed to download file: $e');
+      } finally {
+        isDownloading.value = false;
+      }
+    }
+
+    // Advanced download functions
+    Future<void> _handleDownload(RemarkAttachment attachment) async {
+      DateTime now = DateTime.now();
+      String formattedDate = DateFormat('yyyy-MM-dd').format(now);
+
+      try {
+        if (attachment.fileSize == "0") {
+          _showSnackBar(context, 'File not uploaded properly');
+        } else {
+          String downloadUrl = '${attachment.url}/${attachment.imageName}';
+          print('Download URL: $downloadUrl');
+
+          if (Platform.isAndroid) {
+            await _downloadFileAndroid(downloadUrl, context, attachment.imageName, flutterLocalNotificationsPlugin);
+          } else if (Platform.isIOS) {
+            await _downloadFileIOS(downloadUrl, attachment.imageName, flutterLocalNotificationsPlugin);
+          } else {
+            _showSnackBar(context, 'Unsupported platform');
+          }
+        }
+      } catch (e) {
+        _showSnackBar(context, 'Failed to download file: $e');
+      }
+    }
+
+    Future<void> onOpenAttachment(String url) async {
+      final uri = Uri.tryParse(url);
+      if (uri == null) {
+        _showSnackBar(context, 'Invalid attachment URL');
+        return;
+      }
+      try {
+        if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+          _showSnackBar(context, 'Could not open attachment');
+        }
+      } catch (e) {
+        _showSnackBar(context, 'Error opening attachment: $e');
+      }
+    }
 
     // Attachments upload handler
     Future<void> uploadAttachment() async {
@@ -72,29 +270,29 @@ class EditRemark extends HookConsumerWidget {
 
       for (final file in result.files) {
         try {
-          final uploadOk = await remarkService.uploadRemarkDocument(
+          final uploadOk = await remarkService.euploadRemarkDocument(
             studentIds: json.encode([remark.studentId]),
             shortName: auth.teacherVerification?.shortName ?? '',
             filename: file.name,
             fileBytes: file.bytes!,
             uploadDate: _dateController.text,
+            academicYr: auth.academicYr ?? '',
+            teacherId: auth.regId ?? '',
+            remarkId: remark.remarkId,
           );
           if (!uploadOk) {
             allOk = false;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to upload ${file.name}')),
-            );
+            _showSnackBar(context, 'Failed to upload ${file.name}');
           }
         } catch (e) {
           allOk = false;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error uploading ${file.name}: $e')),
-          );
+          _showSnackBar(context, 'Error uploading ${file.name}: $e');
         }
       }
 
       uploading.value = false;
       if (allOk) {
+        // Refresh attachments
         loadingAttachments.value = true;
         final remarkService = ref.read(remarkServiceProvider);
         final auth = ref.read(authProvider).requireValue;
@@ -104,12 +302,10 @@ class EditRemark extends HookConsumerWidget {
             remarkDate: _dateController.text,
             shortName: auth.teacherVerification?.shortName ?? '',
           );
-          attachments.value = res.cast<RemarkAttachment>();
-          // attachmentUrl.value = attachments.value.isNotEmpty ? attachments.value.url : "";
+          attachments.value = res;
+          _showSnackBar(context, 'Files uploaded successfully!');
         } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to load attachments: $e')),
-          );
+          _showSnackBar(context, 'Failed to load attachments: $e');
         }
         loadingAttachments.value = false;
       }
@@ -120,90 +316,54 @@ class EditRemark extends HookConsumerWidget {
       final auth = ref.read(authProvider).requireValue;
 
       try {
-        final ok = await remarkService.deleteRemarkDocument(
+
+        final remarkIdArray = json.encode([remark.remarkId]);
+        final attArray = json.encode([att.imageName]);
+
+        print("🧨 DELETING ATTACHMENT:");
+        print("  Filename: ${att.imageName}");
+        print("  Remark ID Array: $remarkIdArray");
+        print("  Upload Date: ${_dateController.text}");
+        print("  Short Name: ${auth.teacherVerification?.shortName}");
+
+        final ok = await remarkService.edeleteRemarkDocument(
           upload_date: _dateController.text,
-          student_id: json.encode([remark.remarkId]),
-          shortName: auth.teacherVerification?.shortName ?? '',
-          filename: att.imageName,
+          short_name: auth.teacherVerification?.shortName ?? '',
+          filename: attArray,
+          student_id: remarkIdArray,
         );
+
         if (ok) {
-          // refresh
+          _showSnackBar(context, 'Attachment deleted successfully');
+
+          // Refresh attachments from server
           final res = await remarkService.getRemarkImages(
             remarkId: remark.remarkId,
             remarkDate: _dateController.text,
             shortName: auth.teacherVerification?.shortName ?? '',
           );
-          attachments.value = res.cast<RemarkAttachment>();
-          // attachmentUrl.value = attachments.value.isNotEmpty ? attachments.value.url : "";
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Attachment Deleted ${att.imageName}')));
+          attachments.value = res;
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Attachment Delete failed!')));
+          _showSnackBar(context, 'Failed to delete attachment');
         }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Delete error: $e')));
-      }
-    }
+        print("❌ DELETE ERROR DETAILS: $e");
+        _showSnackBar(context, 'Error: ${e.toString()}');
+      } finally {
 
-    Future<void> onDownload(String filename) async {
-      try {
-        final response = await http.get(Uri.parse(filename));
-        if (response.statusCode == 200) {
-          // Use any downloading logic (such as download() from your library)
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('File downloaded successfully: $filename'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to download file: $filename'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error downloading file: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-
-    Future<void> onOpenAttachment(String url) async {
-      final uri = Uri.tryParse(url);
-      if (uri == null) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Invalid attachment URL')));
-        return;
-      }
-      try {
-        if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Could not open attachment')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error opening attachment: $e')));
       }
     }
 
     void _resetForm() {
       _dateController.text = remark.remarkDate.split(' ').first;
       _subjectOfRemarkController.text = remark.remarkSubject;
-      _remarkController.text = remark.remarkType;
+      _remarkController.text = remark.remarkDesc;
     }
 
     String formatDateForApi(String date) {
       final parts = date.split('-');
-      if (parts.length == 3 && parts.length == 4) {
-        return '${parts[2]}-${parts[1]}-${parts}';
+      if (parts.length == 3 && parts[0].length == 4) {
+        return '${parts[2]}-${parts[1]}-${parts[0]}';
       }
       return date;
     }
@@ -234,19 +394,13 @@ class EditRemark extends HookConsumerWidget {
         );
 
         if (success['status'] == true) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Remark Updated Successfully!")),
-          );
+          _showSnackBar(context, "Remark Updated Successfully!");
           Navigator.of(context).pop(true);
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(success['error_msg'] ?? "Failed to update remark")),
-          );
+          _showSnackBar(context, success['error_msg'] ?? "Failed to update remark");
         }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error updating remark: $e")),
-        );
+        _showSnackBar(context, "Error updating remark: $e");
       }
     }
 
@@ -323,7 +477,7 @@ class EditRemark extends HookConsumerWidget {
                   const Text("*Remark", style: TextStyle(fontWeight: FontWeight.bold)),
                   TextField(
                     controller: _remarkController,
-                    maxLines: 3,
+                    maxLines: 5,
                     decoration: InputDecoration(
                       hintText: "Type here...",
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r)),
@@ -335,16 +489,15 @@ class EditRemark extends HookConsumerWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text("Attachments", style: TextStyle(fontWeight: FontWeight.bold)),
-                      uploading.value
-                          ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                          : IconButton(
-                        icon: const Icon(Icons.attach_file, color: Colors.blue),
-                        onPressed: uploading.value ? null : uploadAttachment,
-                      ),
+                      if (isDownloading.value)
+                        const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      else if (uploading.value)
+                        const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      else
+                        IconButton(
+                          icon: const Icon(Icons.attach_file, color: Colors.blue),
+                          onPressed: uploadAttachment,
+                        ),
                     ],
                   ),
 
@@ -360,33 +513,35 @@ class EditRemark extends HookConsumerWidget {
                       children: attachments.value.map((att) {
                         final url = "${att.url}/${att.imageName}";
                         return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
                           child: Row(
                             children: [
-                              if(att.imageName.contains('.jpg'))
-                                 Icon(Icons.remove_red_eye, color: Colors.redAccent
+                              if(att.imageName.contains('.jpg') || att.imageName.contains('.png'))
+                                const Icon(Icons.image, color: Colors.redAccent, size: 24)
+                              else
+                                const Icon(Icons.insert_drive_file, color: Colors.blue, size: 24),
 
-                              ) else  Icon(Icons.insert_drive_file, color: Colors.blue),
+                              const SizedBox(width: 12),
 
-                              const SizedBox(width: 5),
-
-                              if(att.imageName.contains('.jpg'))
                               Expanded(
-                                child: TextButton( onPressed: () {
-                                  onOpenAttachment(url);
-                                },
-                                child: Text(att.imageName, style: const TextStyle(fontSize: 13))),
-                              ) else Expanded(
-                                child: TextButton( onPressed: () {
-                                  // onOpenAttachment(url);
-                                },
-                                    child: Text(att.imageName, style: const TextStyle(color:Colors.black,fontSize: 13))),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(att.imageName, style: TextStyle(fontSize: 14.sp)),
+                                    Text("Size: ${att.fileSize}", style: TextStyle(fontSize: 12.sp, color: Colors.grey)),
+                                  ],
+                                ),
                               ),
+
+                              if(att.imageName.contains('.jpg') || att.imageName.contains('.png'))
+                                IconButton(
+                                  icon: const Icon(Icons.remove_red_eye, color: Colors.green),
+                                  onPressed: () => onOpenAttachment(url),
+                                ),
+
                               IconButton(
                                 icon: const Icon(Icons.download, color: Colors.blue),
-                                onPressed: () {
-                                  onDownload(url);
-                                  },
+                                onPressed: isDownloading.value ? null : () => _handleDownload(att),
                               ),
                               IconButton(
                                 icon: const Icon(Icons.delete, color: Colors.red),
@@ -439,6 +594,11 @@ class EditRemark extends HookConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+  void _showSnackBar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 }
