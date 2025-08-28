@@ -87,8 +87,9 @@ class RemarkDashBoardView extends HookConsumerWidget {
 
 class RemarkNoteCard extends HookConsumerWidget {
   final Remark remark;
+  final Function(String)? onDelete;
 
-  const RemarkNoteCard({super.key, required this.remark});
+  const RemarkNoteCard({super.key, required this.remark, this.onDelete});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -224,12 +225,15 @@ class RemarkNoteCard extends HookConsumerWidget {
                     IconButton(
                       icon: const Icon(Icons.edit, color: Colors.blue),
                       tooltip: "Edit",
-                      onPressed: () {
-                        Navigator.of(context).push(
+                      onPressed: () async {
+                        final changed = await Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => EditRemark(remark: remark),
                           ),
                         );
+                        if (changed == true) {
+                          ref.invalidate(remarkListProvider);
+                        }
                         showActions.value = false;
                       },
                     ),
@@ -276,11 +280,18 @@ class RemarkNoteCard extends HookConsumerWidget {
                         );
 
                         if (deleted) {
+                          // Remove from local list immediately
+                          if (onDelete != null) {
+                            onDelete!(remark.remarkId);
+                          }
+
+                          // Also refresh the provider to ensure data consistency
+                          ref.invalidate(remarkListProvider);
+
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                                 content: Text('Remark deleted successfully')),
                           );
-                          ref.invalidate(remarkListProvider); // Refresh the remarks list
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
@@ -332,32 +343,6 @@ class RemarkNoteCard extends HookConsumerWidget {
       ),
     );
   }
-
-  // void _deleteRemark(BuildContext context, Remark remark) {
-  //   showDialog(
-  //     context: context,
-  //     builder: (context) => AlertDialog(
-  //       title: const Text("Delete Remark"),
-  //       content: const Text("Are you sure you want to delete this remark?"),
-  //       actions: [
-  //         TextButton(
-  //           onPressed: () => Navigator.pop(context),
-  //           child: const Text("Cancel"),
-  //         ),
-  //         TextButton(
-  //           onPressed: () {
-  //             // TODO: call delete service here
-  //             ScaffoldMessenger.of(context).showSnackBar(
-  //               const SnackBar(content: Text('Remark deleted successfully')),
-  //             );
-  //             Navigator.pop(context);
-  //           },
-  //           child: const Text("Delete", style: TextStyle(color: Colors.red)),
-  //         ),
-  //       ],
-  //     ),
-  //   );
-  // }
 
   void _publishRemark(
       BuildContext context, WidgetRef ref, Remark remark) async {

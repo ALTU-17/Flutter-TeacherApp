@@ -25,21 +25,42 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
     final _sequenceController = TextEditingController(text: sequence);
     final _changeDaily = ValueNotifier<bool>(changeDaily);
 
-    void _resetForm() {
-      _headingController.text = heading;
-      _sequenceController.text = sequence;
-      _changeDaily.value = changeDaily;
+    // Helper: check duplicate sequence among current headings (excluding this id)
+    bool _isDuplicateSequence(String seq) {
+      final state = ref.read(lessonPlanHeadingProvider);
+      final list = state.hasValue ? state.value! : <dynamic>[];
+      final v = seq.trim();
+      return list.any((h) => h.id != id && h.sequence.trim() == v);
+    }
+
+    void _reset() {
+      _headingController.clear();
+      _sequenceController.clear();
+      _changeDaily.value = false;
     }
 
     Future<void> _onUpdate() async {
       if (!_formKey.currentState!.validate()) return;
-      final auth = ref.read(authProvider).requireValue;
+
+      // pre-submit duplicate check
+      final seqNow = _sequenceController.text.trim();
+      if (_isDuplicateSequence(seqNow)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Sequence already exists. Enter a unique value.')),
+        );
+        return;
+      }
+
+      final auth = ref
+          .read(authProvider)
+          .requireValue;
       final service = ref.read(lessonPlanHeadingCreateProvider);
 
       final result = await service.editHeading(
         id: id,
-        sequence: _sequenceController.text,
-        name: _headingController.text,
+        sequence: seqNow,
+        name: _headingController.text.trim(),
         shortName: auth.teacherVerification?.shortName ?? '',
         changeDaily: _changeDaily.value,
       );
@@ -48,7 +69,8 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Lesson Plan Heading Updated!')),
         );
-        Navigator.pop(context, true); // return to list and refresh
+        // Pop with success flag so previous page can refresh
+        Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(result['error_msg'] ?? 'Update failed')),
@@ -60,7 +82,7 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
       appBar: AppBar(
         title: const Text(
           'Edit Lesson Plan Heading',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: Colors.white, fontSize: 18),
         ),
         backgroundColor: const Color.fromARGB(255, 208, 28, 127),
         centerTitle: true,
@@ -90,7 +112,6 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       SizedBox(height: 24.h),
-
                       TextFormField(
                         controller: _headingController,
                         decoration: InputDecoration(
@@ -101,14 +122,15 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
                           contentPadding: EdgeInsets.all(12.w),
                         ),
                         validator: (value) {
-                          if (value == null || value.isEmpty) {
+                          if (value == null || value
+                              .trim()
+                              .isEmpty) {
                             return 'Please enter a heading.';
                           }
                           return null;
                         },
                       ),
                       SizedBox(height: 16.h),
-
                       TextFormField(
                         controller: _sequenceController,
                         decoration: InputDecoration(
@@ -120,34 +142,34 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
                         ),
                         keyboardType: TextInputType.number,
                         validator: (value) {
-                          if (value == null || value.isEmpty) {
+                          final v = value?.trim() ?? '';
+                          if (v.isEmpty)
                             return 'Please enter a sequence number.';
-                          }
-                          if (int.tryParse(value) == null) {
+                          if (int.tryParse(v) == null)
                             return 'Please enter a valid number.';
+                          if (_isDuplicateSequence(v)) {
+                            return 'Sequence already exists. Enter a unique value.';
                           }
                           return null;
                         },
                       ),
                       SizedBox(height: 16.h),
-
                       ValueListenableBuilder<bool>(
                         valueListenable: _changeDaily,
-                        builder: (context, value, _) => Row(
-                          children: [
-                            Checkbox(
-                              value: value,
-                              onChanged: (v) => _changeDaily.value = v ?? false,
+                        builder: (context, value, _) =>
+                            Row(
+                              children: [
+                                Checkbox(
+                                  value: value,
+                                  onChanged: (v) =>
+                                  _changeDaily.value = v ?? false,
+                                ),
+                                Text('Change daily',
+                                    style: TextStyle(fontSize: 16.sp)),
+                              ],
                             ),
-                            Text(
-                              'Change daily',
-                              style: TextStyle(fontSize: 16.sp),
-                            ),
-                          ],
-                        ),
                       ),
                       SizedBox(height: 25.h),
-
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -161,13 +183,11 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
                               padding: EdgeInsets.symmetric(
                                   horizontal: 25.w, vertical: 12.h),
                             ),
-                            child: Text(
-                              'Update',
-                              style: TextStyle(fontSize: 16.sp, color: Colors.white),
-                            ),
+                            child: Text('Update', style: TextStyle(
+                                fontSize: 16.sp, color: Colors.white)),
                           ),
                           ElevatedButton(
-                            onPressed: _resetForm,
+                            onPressed: _reset,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.red,
                               shape: RoundedRectangleBorder(
@@ -176,10 +196,8 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
                               padding: EdgeInsets.symmetric(
                                   horizontal: 25.w, vertical: 12.h),
                             ),
-                            child: Text(
-                              'Reset',
-                              style: TextStyle(fontSize: 16.sp, color: Colors.white),
-                            ),
+                            child: Text('Reset', style: TextStyle(
+                                fontSize: 16.sp, color: Colors.white)),
                           ),
                         ],
                       ),
@@ -192,5 +210,4 @@ class EditLessonPlanHeadingPage extends HookConsumerWidget {
         ),
       ),
     );
-  }
-}
+  }}

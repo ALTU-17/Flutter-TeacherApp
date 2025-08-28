@@ -39,7 +39,7 @@ class LessonPlanHeadingService {
           'operation': 'create',
           'name': name,
           'short_name': shortName,
-          // 'change_daily': changeDaily ? 'Y' : '',
+          'change_daily': changeDaily ? 'Y' : '',
         }),
       );
       return response.data;
@@ -64,7 +64,7 @@ class LessonPlanHeadingService {
           'operation': 'edit',
           'name': name,
           'short_name': shortName,
-          // 'change_daily': changeDaily ? 'Y' : '',
+          'change_daily': changeDaily ? 'Y' : '',
         }),
       );
       return response.data;
@@ -81,7 +81,7 @@ class LessonPlanHeadingService {
   }) async {
     try {
       final response = await apiClient.post(
-        '${baseUrl}CurriculumApi/get_lesson_plan_heading',
+        '${baseUrl}CurriculumApi/lesson_plan_heading',
         data: FormData.fromMap({
           'short_name': shortName,
           'lesson_plan_headings_id': id,

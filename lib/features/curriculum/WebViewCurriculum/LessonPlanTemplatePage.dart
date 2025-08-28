@@ -1,52 +1,49 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-class LessonPlanTemplatePage extends StatefulWidget {
+import '../../auth/providers/auth_provider.dart';
+
+class LessonPlanTemplatePage extends ConsumerStatefulWidget {
   const LessonPlanTemplatePage({Key? key}) : super(key: key);
 
   @override
-  State<LessonPlanTemplatePage> createState() => _LessonPlanTemplatePageState();
+  ConsumerState<LessonPlanTemplatePage> createState() =>
+      _LessonPlanTemplatePageState();
 }
 
-class _LessonPlanTemplatePageState extends State<LessonPlanTemplatePage> {
-  late WebViewController _webViewController;
+class _LessonPlanTemplatePageState
+    extends ConsumerState<LessonPlanTemplatePage> {
+  late WebViewController _controller;
   bool _isLoading = true;
-
-  // Replace these with your actual dynamic values
-  final String regId = "sample_reg_id"; // Example: Fetch this dynamically
-  final String acdYr = "2025"; // Example: Fetch this dynamically
-  final String newUrl = "https://example.com/"; // Example: Fetch from database or API
-  late final WebViewController _controller;
 
   @override
   void initState() {
     super.initState();
 
-    // print("WEBVIEW URL: " +
-    //     widget.smartchat_url +
-    //     '?student_id=${widget.studentId}&academic_yr=${widget.academicYr}');
+    // 🔹 Fetch dynamic values from authProvider
+    final auth = ref.read(authProvider).requireValue;
+
+    final String regId = auth.regId ?? '';
+    final String acdYr = auth.academicYr ?? '';
+    final String newUrl = auth.teacherVerification?.teacherapkUrl ?? '';
+
+    // 🔹 Build the lesson plan template URL dynamically
+    final templateUrl =
+        "$newUrl/curriculum/apk_lesson_plan_template?reg_id=$regId&acd_yr=$acdYr&login_type=T";
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (url) {
-            setState(() {
-              _isLoading = true; // Show loading indicator when page starts loading
-            });
-          },
-          onPageFinished: (url) {
-            setState(() {
-              _isLoading = false; // Hide loading indicator when page finishes loading
-            });
-          },
+          onPageStarted: (_) => setState(() => _isLoading = true),
+          onPageFinished: (_) => setState(() => _isLoading = false),
         ),
       )
-      ..loadRequest(Uri.parse(
-          "https://sms.arnoldcentralschool.org/SACSv4test/index.php/curriculum/apk_lesson_plan_template?reg_id=33&acd_yr=2024-2025&login_type=T"
-      ));
+      ..loadRequest(Uri.parse(templateUrl));
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +76,7 @@ class _LessonPlanTemplatePageState extends State<LessonPlanTemplatePage> {
             ),
             child: Column(
               children: [
-                SizedBox(height: 100.h),
+                SizedBox(height: 120.h),
                 Expanded(
                   child: WebViewWidget(controller: _controller),
                 ),
